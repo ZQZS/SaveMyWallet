@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96" role="img" aria-labelledby="title">
+  <title id="title">钱包猫安静坐着</title>
+  <g stroke="#294334" stroke-width="3.5" stroke-linejoin="round" stroke-linecap="round">
+    <path fill="#91bb96" d="M16 48 18 18Q19 15 22 18L37 30Q48 27 59 30L75 18Q78 15 79 19L81 47V64Q81 77 67 78H30Q16 77 16 64Z"/>
+    <path fill="#f5d594" d="M16 57H81V65Q81 78 66 78H31Q16 78 16 65Z"/>
+    <path fill="none" d="M32 46h3m26 0h3m-20 5q4 5 8 0"/>
+    <rect x="60" y="60" width="24" height="12" rx="5" fill="#d5e1bf"/>
+  </g>
+  <circle cx="68" cy="66" r="2" fill="#294334"/>
+</svg>

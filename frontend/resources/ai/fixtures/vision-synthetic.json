@@ -1,0 +1,20 @@
+{
+  "drafts": [
+    {
+      "platformHint": "示例分期平台",
+      "title": "绘图板",
+      "kind": "installment",
+      "month": "2027-01",
+      "amountCents": 3250,
+      "installmentCount": 6
+    },
+    {
+      "platformHint": null,
+      "title": "画册尾款",
+      "kind": "estimate",
+      "month": null,
+      "amountCents": null,
+      "installmentCount": null
+    }
+  ]
+}

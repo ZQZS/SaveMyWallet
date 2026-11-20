@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "id": "wallet-cat",
+  "displayName": "钱包猫",
+  "artworkSource": "SaveMyWallet 项目内绘制的联调占位图",
+  "states": {
+    "idle": "art/idle.svg",
+    "greet": "art/greet.svg"
+  }
+}

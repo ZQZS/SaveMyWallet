@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96" role="img" aria-labelledby="title">
+  <title id="title">钱包猫举起爪子打招呼</title>
+  <g stroke="#294334" stroke-width="3.5" stroke-linejoin="round" stroke-linecap="round">
+    <path fill="#91bb96" d="M16 48 18 18Q19 15 22 18L37 30Q48 27 59 30L75 18Q78 15 79 19L81 47V64Q81 77 67 78H30Q16 77 16 64Z"/>
+    <path fill="#f5d594" d="M16 57H81V65Q81 78 66 78H31Q16 78 16 65Z"/>
+    <path fill="none" d="M29 47q4-7 8 0m22 0q4-7 8 0m-22 3q4 8 8 0"/>
+    <path fill="#d5e1bf" d="M64 64 78 45q4-5 8-1 4 3 1 8L77 68q-7 10-13 2-2-3 0-6Z"/>
+  </g>
+</svg>

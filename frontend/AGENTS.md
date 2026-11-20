@@ -1,0 +1,35 @@
+# SaveMyWallet · AI 开发交接
+
+本文件面向在本仓库中阅读、修改和验证代码的 AI。业务目标是维护 Windows 与安卓共用的离线月度还款账本。当前应用版本为 0.3.0，支持可选的账本同步。开发准备已覆盖桌宠与 AI，实际启用范围以应用入口、路由及 Tauri 命令注册为准。
+
+## 从哪里开始
+
+以 `SaveMyWallet/frontend/` 为项目根目录。下文的命令均在此目录运行，文件路径也相对此目录。
+
+| 任务 | 首先查看 |
+| --- | --- |
+| 改菜单或页面 | [菜单](src/app/menu.ts)、[路由](src/app/router.ts) 和对应的 `src/features/<功能>/`。桌面和手机共用这些页面 |
+| 改金额、月度汇总或预算 | [领域逻辑](src/domain/ledger.ts) 与 [账务测试](tests/ledger.test.mjs)；当前月、下月和预算预览共用注入的计算函数 |
+| 改保存、还款或重试 | [会话](src/app/ledgerSession.ts) → [仓库接口](src/data/repository.ts) → [SQLite 适配器](src/data/sqlite.ts) → [Rust 命令](src-tauri/src/lib.rs)与[数据库操作](src-tauri/src/ledger.rs) |
+| 改设置、语言或本地数据维护 | [设置子路由](src/features/settings/settingsRoutes.ts)、[翻译与格式化](src/i18n/index.ts)、[备份与重置](src-tauri/src/ledger/backup.rs)。预览后确认才可替换账本；重置在 UI 与原生端都要求逐字输入 `重置`。 |
+| 改桌宠、提醒、互动或识图 | 先读对应[里程碑](docs/roadmap.md)，再读[桌宠协议](docs/pets.md)或[AI 接入说明](docs/ai-features.md)。这些是此应用自己的扩展 |
+| 接服务端、WASM 或采集脚本 | [现有扩展契约](docs/extensions.md)与[依赖装配入口](src/main.ts) |
+| 改分期重试、设备绑定或补款冲突 | [部署与认证](../backend/README.md)和[同步协议与冲突处理](../backend/docs/sync.md)。保持每一期的稳定 ID，按账本和操作 ID 去重，拉取数据与游标在本机同一事务提交。 |
+
+## 业务不变量
+
+- 金额单位为整数分，归属月为 `YYYY-MM`。分期输入的是**每期**金额。平台由数据库按 ID 关联，显示名可由用户新增。
+- 整月应还 = 已还 + 已确认待还 + 待确认预估。预计结余 = 当月有效工资 − 整月应还。单月工资覆盖可以是 0；只有缺少覆盖时才用默认值。
+- 勾选只结清当前月份、当前平台、已确认的待还明细。撤销按数据库返回的实际变更 ID 执行。确认预计补款要更新原记录，调整金额或月份时避免重复入账。
+- 页面写入走会话的 `commit`。写成功但刷新失败时只重新读取，并保留表单草稿。在数据库结构变更时，从现有版本增加迁移，验证旧账本可重新打开。
+
+## 扩展边界
+
+默认运行路径是 Tauri → 本机 SQLite。参考样包、提示词、采集结果和模型输出都属于开发资源或输入；用户账本、API Key 和真实截图属于运行时私人数据。使用合成素材调试。开发凭据管理时让原生层保存和使用密钥；识图结果经人工核对后再交给现有写入流程。提醒和宠物从现有汇总读取金额。
+
+## 验证与交付
+
+- 前端、扩展和账务逻辑运行 `npm test` 与 `npm run build`。两者也可在没有密钥、供应商账号或真实图片的环境下执行。
+- Rust、SQLite 或数据迁移改动另运行 `cargo test --manifest-path src-tauri/Cargo.toml --lib`。原生读写通过 `npm run tauri -- dev` 验证，用独立测试账本。
+- 改导航或输入表单时检查桌面与安卓窄屏，以及返回、刷新、写入后读取失败重试。报告中注明实际验过的是浏览器、桌面客户端、APK 静态检查还是真机。
+- 改变目录职责、交付范围或里程碑状态时，一并更新[开发手册](docs/development.md)或[路线图](docs/roadmap.md)。构建环境、命令和产物位置见 [README](README.md)。

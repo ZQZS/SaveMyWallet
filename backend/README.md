@@ -1,0 +1,67 @@
+# SaveMyWallet 账本服务
+
+本服务使用 **ASP.NET Core 10、EF Core 10 和 PostgreSQL**。Windows 与安卓各自从本机 SQLite 读写。两台设备绑定同一服务上的同一账本后，可在联网时交换明细、还款状态和预算。断网录入的分期沿用本机分配的每一期 ID。两端把同一笔预计补款确认为不同金额或月份时，用户可以在设置中选择采用哪个版本。[同步协议与冲突处理](docs/sync.md)
+
+## 在 Windows 上启动开发服务
+
+需要 .NET 10 SDK、一套可以连接的 PostgreSQL 和一个专用数据库。在有 PostgreSQL 管理权限的终端运行以下命令，可建立开发用角色和数据库。
+
+```powershell
+createuser -U postgres --pwprompt wallet_app
+createdb -U postgres --owner=wallet_app wallet_sync
+```
+
+在**仓库根目录**打开 PowerShell 7，用环境变量设置连接串和账本访问令牌。连接串可填写 `Host=127.0.0.1;Port=5432;Database=wallet_sync;Username=wallet_app;Password=实际密码`。账本令牌由部署者生成，长度为 32–1024 个无空格的可打印 ASCII 字符，可用密码管理器生成一串足够长的随机字母和数字并保存。示例中 `personal` 是账本 ID。
+
+```powershell
+$env:ConnectionStrings__Ledger = Read-Host 'PostgreSQL 连接串' -MaskInput
+$env:LedgerTokens__personal = Read-Host 'personal 账本令牌' -MaskInput
+$env:ASPNETCORE_URLS = 'http://127.0.0.1:5180'
+dotnet run --project ./backend/SaveMyWallet.Api --no-launch-profile
+```
+
+服务会在指定的数据库中初始化表结构，数据库角色首次启动时需要建表权限。在另一个 PowerShell 7 窗口做一次认证读取，新的空账本将返回账本 ID、游标 `0` 和空记录数组。
+
+```powershell
+$ledgerToken = Read-Host 'personal 账本令牌' -MaskInput
+$headers = @{ Authorization = "Bearer $ledgerToken" }
+Invoke-RestMethod -Uri http://127.0.0.1:5180/sync/bootstrap -Headers $headers
+```
+
+## 把 Windows 和安卓连到同一本账
+
+1. 在 Windows「系统设置 → 账本数据 → 跨设备同步」输入服务地址和令牌，点击「预览服务器账本」。初次使用时，选已有完整账本的设备作为第一台，选择「绑定并上传本机账本」，再完成一次同步。
+2. 在第二台设备输入同一地址和同一令牌。核对预览中的云端账本与记录数。**「绑定并使用服务器账本」会替换本机账本**。如果第二台设备已经单独记过账，先通过「导入与导出」导出，再决定是否使用云端版本。也可在同步页导出最近一次绑定前保留的本机备份。
+3. 断开网络，在任一设备创建一笔分期。恢复连接后点击「立即同步」，再在另一端同步并按月核对。客户端进程重启后需重新输入令牌并「解锁同步」，期间本机仍能记账。
+
+开发电脑可使用上述回环地址。安卓真机中的 `127.0.0.1` 指向手机自身。USB 联调时在开发电脑执行 `adb reverse tcp:5180 tcp:5180`，即可在安卓调试包中输入 `http://127.0.0.1:5180` 访问电脑上的开发服务。
+
+跨网络部署时，在服务前配置 HTTPS 反向代理并将域名指向两台设备都可达的主机，例 `https://wallet.example.com`。证书须受原生客户端使用的公共信任根信任。API 可继续只监听代理所在主机的回环端口。客户端接受完整 HTTPS 服务地址，明文 HTTP 仅限回环地址。
+
+## 账本归属与维护
+
+在仓库根目录运行 `dotnet publish ./backend/SaveMyWallet.Api -c Release` 可生成部署文件。将 `backend/SaveMyWallet.Api/bin/Release/net10.0/publish/` 整个目录复制到安装了 ASP.NET Core 10 运行时的主机。在同一服务进程配置上文的数据库连接串、账本令牌和监听地址，再运行 `dotnet SaveMyWallet.Api.dll`。
+
+服务通过 `Authorization: Bearer <token>` 确定访问哪个账本。每个 `LedgerTokens__<账本ID>` 对应一套账本，ID 使用 1–80 个英文字母、数字、下划线、点或短横线。不同账本使用不同令牌。同一令牌的持有者拥有该账本的读写权限。此版由管理员分发账本令牌，客户端重开后重新认证。更换同一账本 ID 的令牌并重启服务后，两端输入新令牌即可继续使用原账本。
+
+生产环境将数据库连接串和账本令牌放入部署环境的秘密配置。备份 PostgreSQL 时连同账本、版本、变更日志和幂等回执一起备份，这些表共同决定设备重试和增量拉取的结果。客户端 JSON 导出用于迁移业务数据，服务恢复需要 PostgreSQL 备份。[客户端使用说明](../frontend/README.md)
+
+## 接口和验证
+
+[协议文档](docs/sync.md)包含兼容 Axios 的账本接口、明细作废与恢复、同步请求与响应、版本与游标的区别、断线重试及人工裁决示例。
+
+在独立的测试数据库启动服务，设置两个不同令牌，分别映射到两个空测试账本。然后在仓库根目录运行黑盒集成测试。测试会写入测试数据，复跑时为这次运行配置新的空账本。
+
+```powershell
+$env:SMW_TEST_URL = 'http://127.0.0.1:5180'
+$env:SMW_TEST_TOKEN_A = Read-Host '空测试账本 A 令牌' -MaskInput
+$env:SMW_TEST_TOKEN_B = Read-Host '空测试账本 B 令牌' -MaskInput
+node --test backend/tests/sync.integration.mjs
+```
+
+要验证两份独立 SQLite 均通过客户端的原生网络层与服务通信，另准备一个全新的空测试账本，在仓库根目录使用下列命令。此用例会模拟服务端成功提交后丢失回执、关闭并重开本地账本、重传分期和手动裁决两组补款冲突。
+
+```powershell
+$env:SMW_TEST_TOKEN = Read-Host '第三个空测试账本令牌' -MaskInput
+cargo test --manifest-path frontend/src-tauri/Cargo.toml two_native_sqlite_replicas_sync_through_the_live_postgres_api --lib -- --ignored
+```

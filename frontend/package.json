@@ -1,0 +1,29 @@
+{
+  "name": "save-my-wallet",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "build:wasm": "dotnet publish ../wasm-lib/SaveMyWallet.Wasm.csproj -c Release -o ../wasm-lib/bin/template",
+    "test": "node --experimental-strip-types --test tests/*.test.mjs",
+    "pretest:wasm": "npm run build:wasm",
+    "test:wasm": "node --experimental-strip-types --test tests/wasm-parity.mjs",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0",
+    "@vitejs/plugin-vue": "^6.0.0",
+    "typescript": "~5.9.3",
+    "vite": "^7.0.0",
+    "vue-tsc": "^3.0.0"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0",
+    "axios": "^1.21.1",
+    "lucide-vue-next": "^0.468.0",
+    "vue": "^3.5.0",
+    "vue-router": "^4.6.5"
+  }
+}

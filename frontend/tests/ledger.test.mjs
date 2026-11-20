@@ -1,0 +1,104 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import { currentMonth, installmentPeriods, isMonth, shiftMonth, summarize, toCents } from '../src/domain/ledger.ts'
+
+const platform = { id: 'custom-id', name: '新增平台' }
+const current = '2026-12'
+
+function entry(id, amountCents, status, month = current) {
+  return {
+    id, platformId: platform.id, title: id, month, amountCents, status,
+    kind: status === 'estimated' ? 'estimate' : 'single',
+    installmentIndex: null, installmentCount: null,
+  }
+}
+
+function book(entries) {
+  return {
+    platforms: [platform, { id: 'unused', name: '本月无账单' }], entries,
+    settings: { defaultSalaryCents: 800_000, warningFloorCents: 500_000 },
+    salaryOverrides: { [current]: 600_000 },
+  }
+}
+
+test('月度预测按动态平台合并，仅计目标月份，并把预估纳入结余', () => {
+  const ledger = book([
+    entry('已还', 10101, 'paid'), entry('待还', 20202, 'due'), entry('预估', 30303, 'estimated'),
+    entry('下月', 400004, 'due', '2027-01'),
+  ])
+  const s = summarize(ledger, current)
+  assert.deepEqual([s.paid, s.due, s.estimated, s.total, s.balance], [10101, 20202, 30303, 60606, 539394])
+  assert.deepEqual(s.groups.map(g => [g.platform.name, g.entries.length]), [['新增平台', 3]])
+  const next = summarize(ledger, shiftMonth(current, 1))
+  assert.equal(next.salary, 800000)
+  assert.ok(next.balance < ledger.settings.warningFloorCents)
+})
+
+test('还款勾选只减少待还，补录后已还与待还并存', () => {
+  const ledger = book([entry('初始账单', 1249, 'due')])
+  const before = summarize(ledger, current)
+  ledger.entries[0].status = 'paid'
+  const paid = summarize(ledger, current)
+  assert.equal(paid.due, 0)
+  assert.equal(paid.balance, before.balance)
+  ledger.entries.push(entry('补录', 250, 'due'))
+  const group = summarize(ledger, current).groups[0]
+  assert.deepEqual([group.due, group.paid, group.total], [250, 1249, 1499])
+})
+
+test('作废记录保留顺序和原状态，恢复后金额重新计入原分类', () => {
+  const rows = [entry('已还', 99_999_999_900, 'paid'), entry('待还', 1, 'due'), entry('预估', 2580, 'estimated')]
+  const ledger = book(rows)
+  for (const row of rows) row.voided = true
+  const voided = summarize(ledger, current)
+  assert.deepEqual([voided.paid, voided.due, voided.estimated, voided.total, voided.balance], [0, 0, 0, 0, 600_000])
+  assert.deepEqual(voided.groups[0], { platform, entries: rows, total: 0, due: 0, paid: 0, estimated: 0 })
+
+  delete rows[0].voided
+  const restored = summarize(ledger, current)
+  assert.deepEqual([restored.paid, restored.due, restored.estimated, restored.total, restored.balance],
+    [99_999_999_900, 0, 0, 99_999_999_900, 600_000 - 99_999_999_900])
+})
+
+test('作废分期只影响所选那一期', () => {
+  const nextMonth = shiftMonth(current, 1)
+  const ledger = book([
+    { ...entry('第 1 期', 6900, 'due'), kind: 'installment', installmentIndex: 1, installmentCount: 2, voided: true },
+    { ...entry('第 2 期', 6900, 'due', nextMonth), kind: 'installment', installmentIndex: 2, installmentCount: 2 },
+  ])
+  assert.equal(summarize(ledger, current).total, 0)
+  assert.equal(summarize(ledger, nextMonth).due, 6900)
+})
+
+test('整笔分期按组标识跨年定位，旧分期必须每个期号恰好一条', () => {
+  const first = { ...entry('a1', 6900, 'paid'), title: '月供', kind: 'installment', installmentIndex: 1, installmentCount: 2 }
+  const second = { ...first, id: 'a2', month: '2027-01', installmentIndex: 2, status: 'due', voided: true }
+  const other = [{ ...first, id: 'b1' }, { ...second, id: 'b2' }]
+  assert.deepEqual(installmentPeriods([second, first], second), [first, second])
+  assert.equal(installmentPeriods([first], first), null)
+  assert.equal(installmentPeriods([first, second, ...other], second), null)
+
+  const groupA = [first, second].map(row => ({ ...row, installmentId: 'a'.repeat(32) }))
+  const groupB = other.map(row => ({ ...row, installmentId: 'b'.repeat(32) }))
+  const all = [...groupB, ...groupA, first, second]
+  assert.deepEqual(installmentPeriods(all, groupA[1]), groupA)
+  assert.deepEqual(installmentPeriods(all, second), [first, second])
+  assert.equal(installmentPeriods([groupA[0], { ...groupA[1], month: '2027-02' }], groupA[0]), null)
+})
+
+test('单月工资允许为零，清空覆盖后使用默认工资', () => {
+  const ledger = book([])
+  ledger.salaryOverrides[current] = 0
+  assert.equal(summarize(ledger, current).balance, 0)
+  delete ledger.salaryOverrides[current]
+  assert.equal(summarize(ledger, current).balance, 800000)
+})
+
+test('金额按分解析，月份按设备本地日历跨年', () => {
+  assert.deepEqual(['0.29','2.1','0','999999999'].map(toCents), [29,210,0,99999999900])
+  for (const invalid of ['1.002','1e4','','-1','1000000000','Infinity']) assert.equal(toCents(invalid), null)
+  assert.equal(currentMonth(new Date(2026, 0, 1, 0, 0)), '2026-01')
+  assert.equal(shiftMonth('2026-01', -1), '2025-12')
+  assert.equal(shiftMonth('2026-12', 2), '2027-02')
+  assert.ok(!isMonth('2099-13') && !isMonth('2100-01'))
+})

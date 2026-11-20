@@ -1,0 +1,24 @@
+[package]
+name = "save-my-wallet"
+version = "0.3.0"
+description = "SaveMyWallet 本地月度账本"
+edition = "2021"
+
+[lib]
+name = "save_my_wallet_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
+tokio = { version = "1", features = ["sync"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tempfile = "3"
+

@@ -1,0 +1,41 @@
+.settings-page {
+  max-width: 760px;
+  margin-inline: auto;
+  min-width: 0;
+  display: grid;
+  gap: 22px;
+}
+.settings-header { display: grid; gap: 8px; justify-items: start; }
+.settings-page h1 { font-size: clamp(1.55rem, 3vw, 2rem); line-height: 1.25; letter-spacing: -.04em; }
+.settings-page h2 { font-size: 1.06rem; line-height: 1.4; }
+.settings-page h3 { margin: 0; font-size: 1rem; }
+.settings-muted { color: var(--sub); font-size: .9rem; line-height: 1.65; }
+.settings-sheet {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: var(--surface);
+  display: grid; gap: 14px; padding: clamp(16px, 3vw, 26px);
+}
+.settings-back { display: inline-flex; align-items: center; gap: 3px; min-height: 36px; padding: 0 3px 0 0; color: var(--green); background: transparent; border: 0; font-weight: 600; }
+.settings-page button:disabled { opacity: .55; cursor: default; }
+.settings-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.settings-button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: 44px; padding: 9px 14px; font-size: .9rem; font-weight: 600;
+  color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 9px;
+}
+.settings-button.primary { color: #fff; background: var(--green); border-color: var(--green); }
+.settings-button.danger { color: #963d2e; border-color: #d5a79b; }
+.settings-button.confirm-danger { color: #fff; background: #8c382a; border-color: #8c382a; }
+.settings-warning { padding: 12px 14px; border-radius: 9px; background: #fbefdc; color: #6f4b1f; font-size: .88rem; line-height: 1.6; }
+.settings-error { color: #933d2d; font-size: .9rem; overflow-wrap: anywhere; }
+.settings-preview { display: grid; gap: 12px; border-top: 1px solid var(--line); padding-top: 16px; }
+.settings-file { font-size: .93rem; overflow-wrap: anywhere; }
+.settings-counts { display: flex; flex-wrap: wrap; gap: 12px 24px; margin: 0; }
+.settings-counts div { display: grid; gap: 4px; }
+.settings-counts dt { color: var(--sub); font-size: .8rem; }
+.settings-counts dd { margin: 0; font-variant-numeric: tabular-nums; font-weight: 650; }
+.settings-reset-form { display: grid; gap: 13px; }
+.settings-reset-form label { display: grid; gap: 6px; font-size: .9rem; font-weight: 600; }
+.settings-reset-form input { width: 100%; max-width: 26rem; padding: 9px 12px; min-height: 44px; border: 1px solid var(--line); border-radius: 9px; background: var(--paper); color: var(--ink); font-size: 1rem; }
