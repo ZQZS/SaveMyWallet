@@ -9,6 +9,7 @@ export const sqliteRepository: LedgerRepository = {
   },
   createPlatform: (name) => invoke<string>('create_platform', { name }),
   createBill: (input) => invoke<void>('create_bill', { input }),
+  createBills: (inputs) => invoke<void>('create_bills', { inputs }),
   confirmEstimate: (input) => invoke<void>('confirm_estimate', { input }),
   setEntryVoided: (id, voided) => invoke<void>('set_entry_voided', { id, voided }),
   setInstallmentVoided: (id, voided) => invoke<string[]>('set_installment_voided', { id, voided }),

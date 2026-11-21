@@ -4,7 +4,7 @@ import type { LedgerSearchFilters } from '../../features/ai/ledgerSearch.ts'
 import type { NoticeDraft } from '../../features/ai/noticeMatch.ts'
 import type { ReminderFacts } from './capabilities.ts'
 import type { PetChatDetails } from '../../features/pets/petChatDetails.ts'
-import { readBillDrafts } from './visionDrafts.ts'
+import { readBillRecognition } from './visionDrafts.ts'
 
 export interface SelectedAiImage {
   imageToken: string
@@ -90,7 +90,7 @@ export function parseLedgerSearch(message: string, referenceMonth: string, signa
 export async function recognizeAiBills(imageToken: string, signal?: AbortSignal, platformName?: string, referenceMonth?: string) {
   const result = await request<unknown>('ai_recognize', { imageToken, platformName }, signal)
   try {
-    return readBillDrafts(result, referenceMonth)
+    return readBillRecognition(result, referenceMonth, platformName)
   } catch {
     throw new Error('AI_BAD_RESPONSE')
   }

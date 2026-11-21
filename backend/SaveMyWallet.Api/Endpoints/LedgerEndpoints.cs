@@ -34,6 +34,8 @@ public static class LedgerEndpoints
             Write(ctx, store, "POST /platforms", input, rows => LedgerCommands.CreatePlatform(rows, input), ct));
         app.MapPost("/bills", (HttpContext ctx, ISyncStore store, NewBill input, CancellationToken ct) =>
             Write(ctx, store, "POST /bills", input, _ => LedgerCommands.CreateBill(input), ct));
+        app.MapPost("/bills/batch", (HttpContext ctx, ISyncStore store, NewBill?[] inputs, CancellationToken ct) =>
+            Write(ctx, store, "POST /bills/batch", inputs, _ => LedgerCommands.CreateBills(inputs), ct));
         app.MapPost("/bills/{id}/confirm", (HttpContext ctx, ISyncStore store, string id, Confirmation input, CancellationToken ct) =>
         {
             id = BillId(ctx, id);

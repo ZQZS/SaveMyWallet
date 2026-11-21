@@ -40,6 +40,8 @@ export interface BillInput {
   amountCents: number
   kind: BillKind
   installmentCount: number
+  /** When importing a running plan, month is this period's month. Earlier periods are omitted. */
+  installmentIndex?: number
   totalCents?: number
   depositCents?: number
 }

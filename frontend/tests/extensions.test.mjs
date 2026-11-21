@@ -58,6 +58,32 @@ test('在线分期重试可复用提交 ID，两次独立的新消费即使内�
   assert.equal(new Set(keys).size, 3)
 })
 
+test('多条账单和指定起始期的分期使用批量接口并传递一次提交的幂等键', async () => {
+  const calls = []
+  const client = createApiClient('https://ledger.example.invalid')
+  client.defaults.adapter = async config => {
+    calls.push([config.url, JSON.parse(config.data), config.headers.get('Idempotency-Key')])
+    return { data: null, status: 204, statusText: 'OK', headers: {}, config }
+  }
+  const repo = createApiLedgerRepository(client)
+  const partial = { platformId: 'p1', title: '分期', month: '2026-12', amountCents: 570,
+    kind: 'installment', installmentIndex: 3, installmentCount: 4 }
+  const single = { platformId: 'p1', title: '单笔', month: '2026-12', amountCents: 100,
+    kind: 'single', installmentCount: 1 }
+  const inputs = [single, partial]
+  const key = crypto.randomUUID()
+  const partialKey = crypto.randomUUID()
+  await repo.createBills(inputs, key)
+  await repo.createBills(inputs, key)
+  await repo.createBill(partial, partialKey)
+  await repo.createBills(inputs)
+  assert.deepEqual(calls.slice(0, 3), [
+    ['/bills/batch', inputs, key], ['/bills/batch', inputs, key], ['/bills/batch', [partial], partialKey],
+  ])
+  assert.ok(calls[3][2])
+  assert.notEqual(calls[3][2], key)
+})
+
 test('WASM 加载器按需初始化，复用并发请求，失败后可重试', async () => {
   let imports = 0
   let initializations = 0

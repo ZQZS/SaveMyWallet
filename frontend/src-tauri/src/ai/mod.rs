@@ -146,9 +146,13 @@ async fn recognize(
 }
 
 fn bill_drafts(reply: &str) -> Result<Value, String> {
-    let mut output: Value = serde_json::from_str(reply).map_err(|_| "AI_BAD_RESPONSE")?;
-    let drafts = output.get_mut("drafts").ok_or("AI_BAD_RESPONSE")?;
-    let rows = drafts.as_array_mut().ok_or("AI_BAD_RESPONSE")?;
+    const JS_MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+    let mut output: serde_json::Map<String, Value> =
+        serde_json::from_str(reply).map_err(|_| "AI_BAD_RESPONSE")?;
+    let rows = output
+        .get_mut("drafts")
+        .and_then(Value::as_array_mut)
+        .ok_or("AI_BAD_RESPONSE")?;
     for row in rows {
         // The existing readBillDrafts parser validates values; only candidate fields cross IPC.
         row.as_object_mut()
@@ -164,12 +168,20 @@ fn bill_drafts(reply: &str) -> Result<Value, String> {
                         | "amountCents"
                         | "totalCents"
                         | "depositCents"
+                        | "refundText"
+                        | "isRefunded"
                         | "kind"
                         | "installmentCount"
+                        | "installmentIndex"
                 )
             });
     }
-    Ok(json!({"drafts": drafts.take()}))
+    output.retain(|field, value| {
+        field == "drafts"
+            || (field == "statementTotalCents"
+                && value.as_u64().is_some_and(|n| n <= JS_MAX_SAFE_INTEGER))
+    });
+    Ok(Value::Object(output))
 }
 
 #[derive(Serialize)]
@@ -238,12 +250,46 @@ mod tests {
             json!({"drafts":[{"platformHint":"demo","month":null}]}));
         let deposit = json!({"drafts":[{"kind":"estimate","totalCents":10900,"depositCents":900,"amountCents":10000}]});
         assert_eq!(bill_drafts(&deposit.to_string()).unwrap(), deposit);
+        let statement = json!({"drafts":[
+            {"kind":"installment","installmentIndex":2,"installmentCount":3,"statementMonthText":"12月总计账单",
+                "amountCents":3250,"refundText":"有退款，已退至其他月份账单"},
+            {"title":"商家退款","isRefunded":true,"amountCents":-200}
+        ]});
+        assert_eq!(bill_drafts(&statement.to_string()).unwrap(), statement);
         assert_eq!(
             bill_drafts(r#"{"drafts":[]}"#).unwrap(),
             json!({"drafts":[]})
         );
         for bad in [" ", "{}", "[]", "42", r#"{"drafts":[1]}"#, r#"{"drafts":["#] {
             assert_eq!(bill_drafts(bad).unwrap_err(), "AI_BAD_RESPONSE");
+        }
+    }
+
+    #[test]
+    fn screenshots_keep_only_an_explicit_safe_statement_total_at_the_root() {
+        let row = json!({"title":"合成消费","amountCents":3250});
+        let mut reply = json!({"drafts":[row], "totalCents":5000});
+        reply["drafts"][0]["statementTotalCents"] = json!(5000);
+        for cents in [0_u64, 5000, 9_007_199_254_740_991] {
+            reply["statementTotalCents"] = json!(cents);
+            assert_eq!(
+                bill_drafts(&reply.to_string()).unwrap(),
+                json!({"drafts":[row], "statementTotalCents":cents})
+            );
+        }
+        for invalid in [
+            Value::Null,
+            json!("5000"),
+            json!(true),
+            json!(-1),
+            json!(12.5),
+            json!(9_007_199_254_740_992_u64),
+        ] {
+            reply["statementTotalCents"] = invalid;
+            assert_eq!(
+                bill_drafts(&reply.to_string()).unwrap(),
+                json!({"drafts":[row]})
+            );
         }
     }
 

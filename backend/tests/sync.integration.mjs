@@ -190,6 +190,36 @@ test('two isolated ledgers sync through the running PostgreSQL API', async t => 
     assert.equal(Object.hasOwn(success(await request('/ledger')).salaryOverrides, budget.month), false)
   })
 
+  await t.test('REST batch commits reviewed bills once and starts installments in the photographed month', async () => {
+    const single = { platformId, kind: 'single', title: '截图单笔', month: '2026-12', amountCents: 500, installmentCount: 1 }
+    const partial = { ...single, kind: 'installment', title: '截图剩余分期', installmentIndex: 3, installmentCount: 4 }
+    const baseline = await bootstrap()
+    const key = randomUUID()
+    const save = bills => request('/bills/batch', { method: 'POST', body: bills, key })
+    for (const bad of [[], [single, null], [single, { ...single, installmentIndex: 1 }],
+      [single, { ...partial, installmentIndex: 0 }], [single, { ...partial, installmentIndex: 5 }],
+      [single, { ...partial, month: '1900-01' }], [single, { ...partial, month: '2099-12' }],
+      [single, { ...partial, platformId: 'missing-platform' }]]) {
+      assert.equal((await save(bad)).status, 400)
+    }
+    assert.deepEqual(await bootstrap(), baseline)
+    const batch = [single, partial]
+    const retries = await Promise.all([save(batch), save(batch)])
+    for (const response of retries) assert.equal(response.status, 204)
+    const page = success(await request('/sync/pull?cursor=' + baseline.cursor))
+    assert.equal(page.cursor, baseline.cursor + 1)
+    assert.equal(page.records.length, 3)
+    const installments = page.records.map(r => r.value).filter(e => e.kind === 'installment')
+      .sort((a, b) => a.installmentIndex - b.installmentIndex)
+    assert.deepEqual(installments.map(e => [e.month, e.installmentIndex, e.installmentCount, e.amountCents]),
+      [['2026-12', 3, 4, 500], ['2027-01', 4, 4, 500]])
+    assert.ok(installments[0].installmentId)
+    assert.equal(installments[1].installmentId, installments[0].installmentId)
+    const conflict = await save([single])
+    assert.deepEqual([conflict.status, conflict.data.code], [409, 'replay_mismatch'])
+    assert.equal((await bootstrap()).cursor, page.cursor)
+  })
+
   await t.test('REST replays original receipts and shares device platform IDs and single-bill semantics', async () => {
     const platformKey = randomUUID()
     const options = { method: 'POST', key: platformKey, body: { name: 'QA 移动账本' } }

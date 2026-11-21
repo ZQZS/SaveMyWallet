@@ -136,6 +136,40 @@ fn backup_round_trips_ids_order_states_and_zero_salary_override() {
 }
 
 #[test]
+fn restored_installment_tail_keeps_its_periods_and_can_be_voided_individually() {
+    let mut source = database();
+    let platform = add_platform(&source, "书店").unwrap();
+    let mut input = bill(&platform, "画册月供", "2026-12", 6900, "installment");
+    input.installment_index = Some(3);
+    input.installment_count = 4;
+    add_bill(&mut source, input).unwrap();
+
+    let saved = export(&mut source).unwrap();
+    assert_eq!(preview(&saved).unwrap().entries, 2);
+    let mut target = database();
+    restore(&mut target, &saved).unwrap();
+    assert_eq!(snapshot_json(&mut target), snapshot_json(&mut source));
+    let periods = snapshot(&mut target).unwrap().entries;
+    assert_eq!(periods[0].installment_index, Some(3));
+    assert_eq!(periods[1].installment_index, Some(4));
+    assert!(periods[0].installment_id.is_some());
+    assert_eq!(periods[0].installment_id, periods[1].installment_id);
+
+    let error =
+        crate::ledger::set_installment_voided(&mut target, &periods[0].id, true).unwrap_err();
+    assert_eq!(error.to_string(), "INSTALLMENT_GROUP_UNAVAILABLE");
+    assert!(snapshot(&mut target)
+        .unwrap()
+        .entries
+        .iter()
+        .all(|entry| !entry.voided));
+    crate::ledger::set_entry_voided(&mut target, &periods[0].id, true).unwrap();
+    let updated = snapshot(&mut target).unwrap().entries;
+    assert!(updated[0].voided);
+    assert!(!updated[1].voided);
+}
+
+#[test]
 fn backup_preserves_voided_installment_and_payment_state() {
     let mut source = sample_ledger();
     // Older v1/v2 backups contain installment numbers but no group identifier.

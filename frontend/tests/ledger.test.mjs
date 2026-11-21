@@ -102,6 +102,19 @@ test('整笔分期按组标识跨年定位，旧分期必须每个期号恰好�
   assert.equal(installmentPeriods([groupA[0], { ...groupA[1], month: '2027-02' }], groupA[0]), null)
 })
 
+test('从第 3/4 期录入的月账单只展示已入账期次，作废范围限于单期', () => {
+  const third = { ...entry('p3', 6900, 'due'), title: '月供', kind: 'installment',
+    installmentId: 'a'.repeat(32), installmentIndex: 3, installmentCount: 4 }
+  const fourth = { ...third, id: 'p4', month: '2027-01', installmentIndex: 4 }
+  const ledger = book([third, fourth])
+  assert.equal(installmentPeriods(ledger.entries, fourth), null)
+  assert.deepEqual(summarize(ledger, '2026-11').groups, [])
+  assert.deepEqual(summarize(ledger, current).groups[0].entries, [third])
+  third.voided = true
+  assert.equal(summarize(ledger, current).due, 0)
+  assert.equal(summarize(ledger, '2027-01').due, 6900)
+})
+
 test('单月工资允许为零，清空覆盖后使用默认工资', () => {
   const ledger = book([])
   ledger.salaryOverrides[current] = 0

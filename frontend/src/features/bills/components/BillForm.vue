@@ -2,11 +2,12 @@
 import { computed, ref, watch } from 'vue'
 import { ArrowLeft, CalendarDays } from 'lucide-vue-next'
 import { t, formatMoney, formatMonth } from '../../../i18n'
-import { estimateTotalCents, isMonth, MAX_MONTH, MIN_MONTH, shiftMonth } from '../../../domain/ledger'
+import { estimateTotalCents, isMonth, MAX_MONTH, MIN_MONTH } from '../../../domain/ledger'
 import type { BillInput, Entry, Platform } from '../../../domain/ledger'
 import { draftPlatformId, type RecognizedBillDraft } from '../../../integrations/ai/visionDrafts'
 import PlatformPicker from '../../platforms/components/PlatformPicker.vue'
 import { readBillAmounts } from '../billAmounts'
+import { readInstallmentSchedule } from '../installmentSchedule'
 
 const props = defineProps<{
   platforms: Platform[]; month: string; entry: Entry | null; busy: boolean
@@ -26,18 +27,16 @@ const totalPrice = ref('')
 const deposit = ref('0')
 const month = ref('')
 const count = ref('3')
+const installmentIndex = ref('1')
 const errorKey = ref('')
 const creatingPlatform = ref(false)
 const isEstimate = computed(() => kind.value === 'estimate')
 const amounts = computed(() => readBillAmounts(kind.value, amount.value, totalPrice.value, deposit.value))
 const amountCents = computed(() => typeof amounts.value === 'string' ? null : amounts.value.amountCents)
 const isInstallment = computed(() => kind.value === 'installment' && !props.entry)
-const lastMonth = computed(() => {
-  const periods = Number(count.value)
-  if (!isMonth(month.value) || !Number.isInteger(periods) || periods < 1 || periods > 120) return ''
-  const end = shiftMonth(month.value, periods - 1)
-  return isMonth(end) ? end : ''
-})
+const reviewInstallment = computed(() => props.review && isInstallment.value)
+const schedule = computed(() => readInstallmentSchedule(month.value, Number(count.value),
+  reviewInstallment.value ? Number(installmentIndex.value) : 1))
 
 watch([() => props.entry?.id, () => props.month, () => props.initialDraft], () => {
   const entry = props.entry
@@ -54,6 +53,7 @@ watch([() => props.entry?.id, () => props.month, () => props.initialDraft], () =
   deposit.value = String((entry?.depositCents ?? draft?.depositCents ?? 0) / 100)
   month.value = entry?.month ?? (draft ? draft.month ?? '' : props.month)
   count.value = draft ? String(draft.installmentCount ?? '') : '3'
+  installmentIndex.value = draft?.installmentIndex === null ? '' : String(draft?.installmentIndex ?? 1)
   errorKey.value = ''
   creatingPlatform.value = false
 }, { immediate: true })
@@ -79,11 +79,12 @@ function submit() {
     errorKey.value = validatedAmounts
   } else if (!isMonth(month.value)) {
     errorKey.value = 'forms.monthError'
-  } else if (isInstallment.value && !lastMonth.value) {
-    errorKey.value = 'forms.scheduleError'
+  } else if (isInstallment.value && !schedule.value) {
+    errorKey.value = reviewInstallment.value ? 'forms.reviewScheduleError' : 'forms.scheduleError'
   } else {
     emit('submit', { platformId: platformId.value, title: trimmedTitle, month: month.value, ...validatedAmounts,
-      kind: kind.value, installmentCount: isInstallment.value ? Number(count.value) : 1 })
+      kind: kind.value, installmentCount: isInstallment.value ? Number(count.value) : 1,
+      ...(reviewInstallment.value ? { installmentIndex: Number(installmentIndex.value) } : {}) })
   }
 }
 </script>
@@ -118,20 +119,25 @@ function submit() {
           <input v-model="amount" name="amount" inputmode="decimal" required :disabled="busy" placeholder="0.00" />
         </label>
         <label class="ledger-field">
-          <span>{{ t(entry ? 'forms.monthConfirmed' : isInstallment ? 'forms.monthFirst' : kind === 'estimate' ? 'forms.monthEstimated' : 'forms.monthDue') }}</span>
+          <span>{{ t(entry ? 'forms.monthConfirmed' : reviewInstallment ? 'forms.monthCurrent' : isInstallment ? 'forms.monthFirst' : kind === 'estimate' ? 'forms.monthEstimated' : 'forms.monthDue') }}</span>
           <input v-model="month" name="month" type="month" :min="MIN_MONTH" :max="MAX_MONTH" required :disabled="busy" />
         </label>
-        <label v-if="isInstallment" class="ledger-field"><span>{{ t('forms.periodCount') }}</span>
+        <label v-if="reviewInstallment" class="ledger-field"><span>{{ t('forms.currentPeriod') }}</span>
+          <input v-model="installmentIndex" name="installmentIndex" type="number" inputmode="numeric" min="1" :max="count || 120" step="1" required :disabled="busy" />
+        </label>
+        <label v-if="isInstallment" class="ledger-field"><span>{{ t(reviewInstallment ? 'forms.totalPeriods' : 'forms.periodCount') }}</span>
           <input v-model="count" name="count" type="number" inputmode="numeric" min="1" max="120" step="1" required :disabled="busy" />
         </label>
       </div>
       <div v-if="isInstallment" class="ledger-summary">
         <CalendarDays :size="18" aria-hidden="true" />
         <div><strong>{{ t('forms.schedule') }}</strong>
-          <p v-if="lastMonth && amountCents !== null && amountCents > 0">
-            {{ t('forms.schedulePreview', { start: formatMonth(month), end: formatMonth(lastMonth), count, total: formatMoney(amountCents * Number(count)) }) }}
+          <p v-if="schedule && amountCents !== null && amountCents > 0">
+            {{ t(reviewInstallment ? 'forms.reviewSchedulePreview' : 'forms.schedulePreview', {
+              start: formatMonth(month), end: formatMonth(schedule.lastMonth), count: schedule.remaining, total: formatMoney(amountCents * schedule.remaining),
+            }) }}
           </p>
-          <p v-else>{{ t('forms.scheduleHint') }}</p>
+          <p v-else>{{ t(reviewInstallment ? 'forms.reviewScheduleHint' : 'forms.scheduleHint') }}</p>
         </div>
       </div>
       <div v-else-if="isEstimate" class="ledger-summary">

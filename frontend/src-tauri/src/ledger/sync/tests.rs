@@ -127,6 +127,7 @@ fn bill(platform_id: &str, kind: &str, count: u32) -> BillInput {
         deposit_cents: None,
         kind: kind.into(),
         installment_count: count,
+        installment_index: None,
     }
 }
 
@@ -352,6 +353,56 @@ fn a_lost_installment_receipt_reuses_the_operation_and_all_twelve_period_ids_aft
     assert_eq!(expected[0]["month"], "2026-12");
     assert_eq!(expected[11]["month"], "2027-11");
     assert_eq!(entries(&mut android), expected);
+}
+
+#[test]
+fn imported_billed_periods_sync_from_the_statement_month_through_the_last_installment() {
+    let mut source = database();
+    let seed = publish(&mut source);
+    let mut target = database();
+    bind(&mut target, URL, &seed, "replace").unwrap();
+    let platform = ledger::snapshot(&mut source)
+        .unwrap()
+        .platforms
+        .remove(0)
+        .id;
+    let mut ongoing = bill(&platform, "installment", 3);
+    ongoing.installment_index = Some(2);
+    let mut last = bill(&platform, "installment", 3);
+    last.installment_index = Some(3);
+    last.month = "2099-12".into();
+    ledger::add_bills(&mut source, &[ongoing, last, bill(&platform, "single", 1)]).unwrap();
+    let mut cursor = 1;
+    while let Some(operation) = next(&source).unwrap() {
+        cursor += 1;
+        let receipt = accepted(&operation, cursor);
+        ack(&mut source, &receipt).unwrap();
+        pull(&mut target, &page(cursor, &receipt["records"])).unwrap();
+    }
+    let rows = entries(&mut source);
+    assert_eq!(entries(&mut target), rows);
+    assert_eq!(rows.len(), 4);
+    let periods: Vec<_> = rows
+        .iter()
+        .filter(|row| row["kind"] == "installment")
+        .collect();
+    assert_eq!(
+        periods
+            .iter()
+            .map(|row| (&row["month"], &row["installmentIndex"]))
+            .collect::<Vec<_>>(),
+        [
+            (&json!("2026-12"), &json!(2)),
+            (&json!("2027-01"), &json!(3)),
+            (&json!("2099-12"), &json!(3))
+        ]
+    );
+    assert!(periods
+        .iter()
+        .all(|row| row["installmentCount"] == 3 && row["amountCents"] == 30000));
+    assert!(periods[0]["installmentId"].is_string());
+    assert_eq!(periods[0]["installmentId"], periods[1]["installmentId"]);
+    assert_ne!(periods[0]["installmentId"], periods[2]["installmentId"]);
 }
 
 fn confirmed_pair() -> (Connection, Connection, Value, String) {

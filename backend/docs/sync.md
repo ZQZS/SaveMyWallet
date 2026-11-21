@@ -11,6 +11,7 @@ Windows 和安卓始终从各自的 SQLite 读取账本。业务写入与待上�
 | `GET /ledger` | 无 | `200`，含 `platforms, entries, settings, salaryOverrides` 的完整账本 |
 | `POST /platforms` | `{ "name": "京东白条" }` | `200 { "id": "…" }` |
 | `POST /bills` | `{ "platformId": "p1", "title": "耳机", "month": "2026-12", "amountCents": 3200, "kind": "installment", "installmentCount": 12 }` | `204`。示例生成 12 期，每期 32 元 |
+| `POST /bills/batch` | 由一个或多个账单对象组成的数组，字段与 `POST /bills` 相同 | `204`。整批在同一事务入账，任一账单无效时整批回滚 |
 | `POST /bills/{id}/confirm` | `{ "title": "尾款", "month": "2027-01", "amountCents": 35000 }` | `204`。同一条预计补款原位确认，相同内容可重试，已确认且内容不同返回 `409` |
 | `PUT /bills/{id}/voided` | `{ "voided": true }` 作废或 `{ "voided": false }` 恢复 | `204`。只变更指定明细，重复设置同一状态不会推进游标 |
 | `PUT /bills/{id}/installment/voided` | `{ "voided": true }` 作废整笔分期，或 `{ "voided": false }` 恢复整笔分期。路径中的 ID 可取其中任意一期 | `200 { "changedIds": ["e1", "e3"] }`，按期次返回本次实际改变的明细 ID，所有变更在同一事务提交 |
@@ -21,7 +22,9 @@ Windows 和安卓始终从各自的 SQLite 读取账本。业务写入与待上�
 
 写接口均可携带 `Idempotency-Key` 请求头。调用方为一次用户提交生成一个随机操作 ID，直到收到结果都重用这个 ID 和相同请求。缺少该请求头时，每次请求都是一次新的提交。业务接口与同步接口写入同一个账本，在线业务接口的改动也会进入增量流。当前 Vue 页面走 SQLite，原生同步使用下述协议，离线分期会带上已在设备中生成的各期 ID。[Axios 路径与类型](../../frontend/src/integrations/api/ledgerApi.ts)
 
-使用现有 Axios 适配器直接在线提交分期时，可调用 `repository.createBill(input, operationId)`。调用方在第一次发送前保存这个 ID，遇到超时或响应丢失时传回同一个 ID。相同内容的两次独立消费各用一个 ID。客户端的离线同步由 SQLite 自动持久化操作 ID。
+分期输入可通过 `installmentIndex` 指定当前期次，默认为第 1 期。`month` 为当前期的还款月，`amountCents` 为每期金额。例如 `month: "2026-12", installmentIndex: 3, installmentCount: 4` 会生成 2026 年 12 月的第 3 期和 2027 年 1 月的第 4 期。仅导入剩余期数的账单可逐期作废或恢复。
+
+Axios 适配器提供 `repository.createBill(input, operationId)` 和 `repository.createBills(inputs, operationId)`。指定当前期次或成批提交时，适配器会使用新的批量端点，服务端须支持 `POST /bills/batch`。调用方在第一次发送前保存这次提交的 ID，遇到超时或响应丢失时重用相同的 ID、账单内容和顺序。相同内容的两次独立消费各用一个 ID。客户端的离线同步由 SQLite 自动持久化操作 ID。
 
 ## 同步记录和版本
 

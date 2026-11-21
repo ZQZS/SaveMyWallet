@@ -7,6 +7,10 @@ export function createApiClient(baseURL: string): AxiosInstance {
 }
 
 export function createApiLedgerRepository(client: AxiosInstance) {
+  async function createBills(inputs: BillInput[], operationId: string = crypto.randomUUID()) {
+    await client.post('/bills/batch', inputs, { headers: { 'Idempotency-Key': operationId } })
+  }
+
   return {
     async load() {
       const { data } = await client.get<LedgerData>('/ledger')
@@ -18,8 +22,11 @@ export function createApiLedgerRepository(client: AxiosInstance) {
     },
     async createBill(input: BillInput, operationId: string = crypto.randomUUID()) {
       // An online caller retrying a logical submission passes its original operation ID.
+      // Older servers ignore unknown /bills fields and would book every installment.
+      if (input.installmentIndex !== undefined) return createBills([input], operationId)
       await client.post('/bills', input, { headers: { 'Idempotency-Key': operationId } })
     },
+    createBills,
     async confirmEstimate(input) {
       const { id, ...changes } = input
       await client.post('/bills/' + encodeURIComponent(id) + '/confirm', changes)

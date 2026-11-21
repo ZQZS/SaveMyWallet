@@ -106,6 +106,7 @@ pub struct BillInput {
     deposit_cents: Option<i64>,
     kind: String,
     installment_count: u32,
+    installment_index: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -335,8 +336,24 @@ pub fn add_platform(conn: &Connection, name: &str) -> StorageResult<String> {
 }
 
 pub fn add_bill(conn: &mut Connection, input: BillInput) -> StorageResult<()> {
+    add_bills(conn, &[input])
+}
+
+pub fn add_bills(conn: &mut Connection, inputs: &[BillInput]) -> StorageResult<()> {
+    if inputs.is_empty() {
+        return Err("BILL_BATCH_EMPTY".into());
+    }
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    for input in inputs {
+        insert_bill(&tx, input)?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+fn insert_bill(tx: &Transaction<'_>, input: &BillInput) -> StorageResult<()> {
     let title = bill_title(&input.title)?;
-    let start = month_index(&input.month)?;
+    let billed_month = month_index(&input.month)?;
     let deposit = input.deposit_cents.unwrap_or(0);
     if input.kind != "estimate" && input.deposit_cents.is_some() {
         return Err("ESTIMATE_AMOUNTS_INVALID".into());
@@ -351,10 +368,18 @@ pub fn add_bill(conn: &mut Connection, input: BillInput) -> StorageResult<()> {
         "installment" => return Err("分期期数应为 1 到 120。".into()),
         _ => return Err("未知的账单类型。".into()),
     };
-    if start + periods - 1 > LAST_MONTH {
+    let split = input.kind == "installment";
+    let first_index = input.installment_index.unwrap_or(1);
+    if (!split && input.installment_index.is_some()) || !(1..=periods).contains(&first_index) {
+        return Err("INSTALLMENT_INDEX_INVALID".into());
+    }
+    let schedule_start = billed_month - (first_index - 1);
+    if schedule_start < 1900 * 12 {
+        return Err("请选择 1900 年至 2099 年间有效的还款月份。".into());
+    }
+    if schedule_start + periods - 1 > LAST_MONTH {
         return Err("最后一期超出支持的还款月份。".into());
     }
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let exists: bool = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM platforms WHERE id = ?1)",
         [&input.platform_id],
@@ -364,7 +389,6 @@ pub fn add_bill(conn: &mut Connection, input: BillInput) -> StorageResult<()> {
         return Err("所选还款平台不存在，请重新选择。".into());
     }
     let mut ids = Vec::<String>::new();
-    let split = input.kind == "installment";
     let installment_id: Option<String> = if split {
         Some(tx.query_row("SELECT lower(hex(randomblob(16)))", [], |r| r.get(0))?)
     } else {
@@ -376,9 +400,9 @@ pub fn add_bill(conn: &mut Connection, input: BillInput) -> StorageResult<()> {
              installment_index, installment_count, installment_id, deposit_cents)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) RETURNING id",
         )?;
-        for offset in 0..periods {
-            let index = start + offset;
-            let month = format!("{:04}-{:02}", index / 12, index % 12 + 1);
+        for period in first_index..=periods {
+            let month_index = schedule_start + period - 1;
+            let month = format!("{:04}-{:02}", month_index / 12, month_index % 12 + 1);
             ids.push(insert.query_row(
                 params![
                     input.platform_id,
@@ -387,7 +411,7 @@ pub fn add_bill(conn: &mut Connection, input: BillInput) -> StorageResult<()> {
                     input.amount_cents,
                     status,
                     input.kind,
-                    split.then_some(offset + 1),
+                    split.then_some(period),
                     split.then_some(periods),
                     installment_id,
                     deposit
@@ -396,8 +420,7 @@ pub fn add_bill(conn: &mut Connection, input: BillInput) -> StorageResult<()> {
             )?);
         }
     }
-    sync::capture(&tx, ids.iter().map(|id| ("entry", id.as_str())))?;
-    tx.commit()?;
+    sync::capture(tx, ids.iter().map(|id| ("entry", id.as_str())))?;
     Ok(())
 }
 

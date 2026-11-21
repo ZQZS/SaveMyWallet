@@ -21,13 +21,14 @@ const session = createLedgerSession({ repository, calculateMonth: summarize })
 | 读账本 | `GET /ledger` | `LedgerData` |
 | 新增平台 | `POST /platforms`，提交 `{ name }` | `{ id }` |
 | 新增账单 | `POST /bills`，提交 `BillInput` | 2xx |
+| 批量新增账单 | `POST /bills/batch`，提交非空 `BillInput[]`。指定 `installmentIndex` 的单笔也使用此端点，从指定期次和还款月开始生成剩余期数。 | 204，整批同时入账 |
 | 确认补款 | `POST /bills/{id}/confirm`，提交 `{ title, month, totalCents, depositCents, amountCents }`。金额以分为单位，`amountCents` 等于总价减定金。 | 2xx |
 | 作废或恢复单条明细 | `PUT /bills/{id}/voided`，提交 `{ voided: true }` 或 `{ voided: false }` | 204 |
 | 作废或恢复整笔分期 | `PUT /bills/{id}/installment/voided`，以任一期的明细 ID 提交 `{ voided: true }` 或 `{ voided: false }` | `{ changedIds }`，按期次返回实际变更的 ID |
 | 勾选或取消还款 | `PATCH /payments`，提交 `{ ids, paid }` | `{ changedIds }`，仅含此次实际变更的明细 |
 | 保存预算 | `PUT /budget`，提交 `BudgetInput` | 2xx |
 
-在线创建分期时可在写请求携带 `Idempotency-Key`。双端原生同步会将本地已经分配的每期明细 ID 一起上传，操作 ID 与回执共同处理断线重试。调试首绑、拉取游标或补款冲突时请使用同步接口。[增量请求与响应](../../backend/docs/sync.md)
+在线创建账单或批量导入时，可在重试同一次提交时向 `createBill` 或 `createBills` 再次传入原操作 ID，适配器将其放入 `Idempotency-Key` 请求头。双端原生同步会将本地已经分配的每期明细 ID 一起上传，操作 ID 与回执共同处理断线重试。调试首绑、拉取游标或补款冲突时请使用同步接口。[增量请求与响应](../../backend/docs/sync.md)
 
 ## WASM 月度计算
 

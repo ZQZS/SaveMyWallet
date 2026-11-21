@@ -124,7 +124,7 @@ fn long_bill_sends_ordered_strips_together_and_returns_all_statement_rows() {
                 })
             })
             .collect();
-        let expected = json!({"drafts": rows});
+        let expected = json!({"drafts": rows, "statementTotalCents": 212400});
         let response = json!({"choices":[{"finish_reason":"stop","message":{"content":expected.to_string()}}]});
         let raster =
             image::RgbImage::from_fn(320, 3200, |_, y| image::Rgb([(y / 16) as u8, 42, 64]));

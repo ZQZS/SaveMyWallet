@@ -51,6 +51,11 @@ fn create_bill(db: State<'_, Database>, input: BillInput) -> Result<(), String> 
 }
 
 #[tauri::command(async)]
+fn create_bills(db: State<'_, Database>, inputs: Vec<BillInput>) -> Result<(), String> {
+    db.access(|conn| ledger::add_bills(conn, &inputs))
+}
+
+#[tauri::command(async)]
 fn confirm_estimate(db: State<'_, Database>, input: ConfirmInput) -> Result<(), String> {
     db.access(|conn| ledger::confirm(conn, input))
 }
@@ -147,6 +152,7 @@ pub fn run() {
             load_ledger,
             create_platform,
             create_bill,
+            create_bills,
             confirm_estimate,
             set_entry_voided,
             set_installment_voided,

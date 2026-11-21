@@ -6,16 +6,29 @@ export interface RecognizedBillDraft {
   title: string | null
   month: string | null
   amountCents: number | null
+  /** Original row annotation for the reviewer. */
+  refundText?: string
   totalCents?: number | null
   depositCents?: number | null
+  invalidEstimateAmounts?: true
   kind: BillKind | null
   installmentCount: number | null
+  /** Current period in month. A full plan omits this, an unreadable billed period uses null. */
+  installmentIndex?: number | null
+}
+
+function isHuabeiName(name: string): boolean {
+  return /^(?:支付宝\s*)?花呗(?:分期)?$/.test(name)
 }
 
 export function draftPlatformId(platforms: Platform[], hint?: string | null, selectedId?: string): string {
   if (selectedId && platforms.some(platform => platform.id === selectedId)) return selectedId
   const name = hint?.trim().toLowerCase()
-  return platforms.find(platform => platform.name.toLowerCase() === name)?.id ?? ''
+  if (!name) return ''
+  const exact = platforms.filter(platform => platform.name.toLowerCase() === name)
+  if (exact.length > 0) return exact.length === 1 ? exact[0].id : ''
+  const aliases = isHuabeiName(name) ? platforms.filter(platform => isHuabeiName(platform.name)) : []
+  return aliases.length === 1 ? aliases[0].id : ''
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -76,6 +89,10 @@ function readStatementMonth(label: string, referenceMonth?: string): string | nu
 function readEstimateAmounts(row: Record<string, unknown>, balance: number | null) {
   let totalCents = readInteger(row.totalCents, 1, MAX_AMOUNT_CENTS)
   let depositCents = readInteger(row.depositCents, 0, MAX_AMOUNT_CENTS)
+  if ((row.totalCents != null && totalCents === null) || (row.depositCents != null && depositCents === null)
+    || (row.amountCents != null && balance === null)) {
+    return { totalCents, depositCents, invalidEstimateAmounts: true as const }
+  }
   // Two stated amounts determine the third. A missing deposit is different from an explicit zero.
   if (balance !== null) {
     if (totalCents === null && depositCents !== null) totalCents = readInteger(depositCents + balance, 1, MAX_AMOUNT_CENTS)
@@ -86,6 +103,7 @@ function readEstimateAmounts(row: Record<string, unknown>, balance: number | nul
 
 export function estimateAmountsConflict(draft: RecognizedBillDraft): boolean {
   if (draft.kind !== 'estimate') return false
+  if (draft.invalidEstimateAmounts) return true
   const { amountCents: balance, totalCents, depositCents } = draft
   if (totalCents != null && totalCents < Math.max(balance ?? 0, depositCents ?? 0)) return true
   if (depositCents == null || balance === null) return false
@@ -93,31 +111,96 @@ export function estimateAmountsConflict(draft: RecognizedBillDraft): boolean {
   return sum < 1 || sum > MAX_AMOUNT_CENTS || (totalCents != null && totalCents !== sum)
 }
 
+// Match the prefix on the original title to preserve full-width characters in product names.
+const periodPrefix = /^(?:花呗分期[\s:：、·-]+)?第\s*([0-9０-９]+)\s*(?:[／/]\s*([0-9０-９]+)\s*)?期[\s:：、·-]*/u
+
+function periodValue(field: unknown, printed?: string): number | null {
+  const value = readInteger(field, 1, 120)
+  if (printed === undefined) return value
+  const onBill = readInteger(Number(printed.normalize('NFKC')), 1, 120)
+  return value !== null && value !== onBill ? null : onBill
+}
+
+function rowPlatformHint(row: Record<string, unknown>, title: string | null): string | null {
+  const hint = readText(row.platformHint)
+  if ((!hint || hint === '支付宝') && title?.includes('花呗分期')) return '花呗'
+  return hint
+}
+
+function excludeRefund(row: Record<string, unknown>, title: string | null, payableCharge: boolean): boolean {
+  // A separate refund can display an unsigned amount. Its title identifies the transaction.
+  const refundLabel = /^(?:商家|订单|商品|交易|消费|退货|花呗)?退款(?:$|[\s:：·—，,（(-]|到账|入账|成功|至|到|金额)/
+  const statusTitle = /^(?:已退款|部分退款|有退款)[。.]?$|^(?:(?:已退款|部分退款|有退款)[\s，,:：—-]+)?已退(?:至|到|回)/
+  if (title && (refundLabel.test(title) || statusTitle.test(title))) return true
+  if (payableCharge) return false
+  const status = /(?:已退款|部分退款|退款成功|(?<!没)有退款|已退(?:至|到|回)|(?:退款|退)(?:至|到|回)[^，,。\n]*(?:月|账单))/
+  const memo = readText(row.refundText) ?? ''
+  return row.isRefunded === true || status.test(memo) || refundLabel.test(memo) || status.test(title ?? '')
+    || status.test(readText(row.repaymentTimeText) ?? '')
+}
+
 /** Parse a provider's decoded JSON. Unknown fields never become ledger writes. */
-export function readBillDrafts(response: unknown, referenceMonth?: string): RecognizedBillDraft[] {
+export function readBillRecognition(response: unknown, referenceMonth?: string, selectedPlatform?: string) {
   if (!isRecord(response) || !Array.isArray(response.drafts)) {
     throw new Error('识图响应缺少 drafts 数组。')
   }
-  return response.drafts.flatMap((row: unknown, index: number): RecognizedBillDraft | [] => {
+  const rows = response.drafts.map((row: unknown, index: number) => {
     if (!isRecord(row)) throw new Error(`第 ${index + 1} 条识图草稿格式有误。`)
-    const statementMonth = readText(row.statementMonthText)
     const title = readText(row.title)
-    const billedPeriod = title && /^第\s*\d{1,3}\s*\/\s*\d{1,3}\s*期/.test(title.normalize('NFKC'))
-    // A billed period is one charge. Expanding it as a new plan would post other months too.
-    const isStatementLine = Boolean(statementMonth || billedPeriod)
-    if (isStatementLine && typeof row.amountCents === 'number' && row.amountCents < 0) return []
+    return { row, title, header: readText(row.statementMonthText), prefix: title?.match(periodPrefix),
+      platform: rowPlatformHint(row, title) }
+  })
+  const headers = new Set(rows.map(item => item.header).filter(value => value !== null))
+  const sharedHeader = headers.size === 1 ? [...headers][0] : null
+  const hints = rows.map(item => item.platform).filter(value => value !== null)
+  const platforms = new Set(hints.map(name => isHuabeiName(name) ? '花呗' : name))
+  // 支付宝 alone may label the parent app on a 花呗 statement.
+  if (platforms.has('花呗')) platforms.delete('支付宝')
+  const huabeiPage = (platforms.size === 1 && platforms.has('花呗'))
+    || (isHuabeiName(selectedPlatform?.trim() ?? '') && hints.every(name => name === '支付宝'))
+  // Read the printed total independently so a missing row remains detectable.
+  const statementTotalCents = readInteger(response.statementTotalCents, 0, Number.MAX_SAFE_INTEGER)
+  const isMonthlyStatement = statementTotalCents !== null || headers.size > 0
+  const isStatement = isMonthlyStatement || rows.some(({ row, prefix }) =>
+    row.installmentIndex != null || prefix?.[2] || (huabeiPage && prefix))
+  const sharedPlatform = isStatement && platforms.size === 1 ? [...platforms][0] : null
+  const drafts = rows.flatMap(({ row, title, header, prefix, platform }): RecognizedBillDraft | [] => {
     const recognizedKind = row.kind === 'single' || row.kind === 'installment' || row.kind === 'estimate' ? row.kind : null
-    const kind = isStatementLine ? 'single' : recognizedKind
+    const statementMonth = header ?? (recognizedKind !== 'estimate' ? sharedHeader : null)
+    const huabeiPeriod = Boolean(prefix && (huabeiPage || (platform && isHuabeiName(platform))))
+    const statementLine = Boolean(statementMonth || huabeiPeriod || (isStatement && recognizedKind !== 'estimate'))
+    const billed = Boolean(prefix?.[2] || row.installmentIndex != null || huabeiPeriod
+      || (statementLine && (recognizedKind === 'installment'
+        || (recognizedKind === null && readInteger(row.installmentCount, 2, 120) !== null))))
+    const product = billed && prefix ? readText(title?.slice(prefix[0].length)) : title
+    if (typeof row.amountCents === 'number' && row.amountCents < 0) return []
+    const kind = billed ? 'installment' : statementLine ? 'single' : recognizedKind
     const amountCents = readInteger(row.amountCents, kind === 'estimate' ? 0 : 1, MAX_AMOUNT_CENTS)
+    const charge = billed || kind === 'single' || (kind === null && (huabeiPage || isHuabeiName(platform ?? '')))
+    if (excludeRefund(row, product, charge && amountCents !== null)) return []
+    const count = kind === 'installment' ? periodValue(row.installmentCount, billed ? prefix?.[2] : undefined) : null
+    const index = billed ? periodValue(row.installmentIndex, prefix?.[1]) : null
+    const repaymentText = readText(row.repaymentTimeText)
+    const repaymentMonth = billed && index !== 1 && repaymentText?.startsWith('首期')
+      ? null : readRepaymentMonth(row.repaymentTimeText)
+    const month = readRepaymentMonth(row.month)
+    const refundText = readText(row.refundText)
     return {
-      platformHint: readText(row.platformHint),
-      title,
+      platformHint: platform === '支付宝' && sharedPlatform === '花呗' ? sharedPlatform : platform ?? sharedPlatform,
+      title: product,
       month: statementMonth ? readStatementMonth(statementMonth, referenceMonth)
-        : readRepaymentMonth(row.repaymentTimeText) ?? readRepaymentMonth(row.month),
+        : billed ? month ?? repaymentMonth : repaymentMonth ?? month,
       amountCents,
+      ...(refundText ? { refundText } : {}),
       ...(kind === 'estimate' ? readEstimateAmounts(row, amountCents) : {}),
       kind,
-      installmentCount: kind === 'installment' ? readInteger(row.installmentCount, 1, 120) : null,
+      installmentCount: count,
+      ...(billed ? { installmentIndex: count !== null && index !== null && index > count ? null : index } : {}),
     }
   })
+  return { drafts, statementTotalCents, isMonthlyStatement }
+}
+
+export function readBillDrafts(response: unknown, referenceMonth?: string, selectedPlatform?: string): RecognizedBillDraft[] {
+  return readBillRecognition(response, referenceMonth, selectedPlatform).drafts
 }

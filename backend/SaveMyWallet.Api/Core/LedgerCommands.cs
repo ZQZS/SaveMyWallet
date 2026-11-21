@@ -16,6 +16,18 @@ internal static class LedgerCommands
         return new RestMutation([new SyncChange("platform", id, null, null, value)], new JsonObject { ["id"] = id });
     }
 
+    internal static RestMutation CreateBills(NewBill?[] inputs)
+    {
+        LedgerRules.Require(inputs.Length > 0, "invalid_bills", "Supply at least one bill.");
+        var changes = new List<SyncChange>();
+        foreach (var input in inputs)
+        {
+            if (input is null) throw new LedgerException(400, "invalid_bills", "A bill is required for each item.");
+            changes.AddRange(CreateBill(input).Changes);
+        }
+        return new(changes, null);
+    }
+
     internal static RestMutation CreateBill(NewBill input)
     {
         LedgerRules.ValidateId(input.PlatformId);
@@ -31,18 +43,21 @@ internal static class LedgerCommands
                             "invalid_installment", "Invalid bill kind or number of periods.");
         // The native ledger ignores the form's installment count for single bills and estimates.
         var periods = split ? (int)input.InstallmentCount : 1;
+        var firstIndex = input.InstallmentIndex ?? 1;
+        LedgerRules.Require((split || input.InstallmentIndex is null) && firstIndex >= 1 && firstIndex <= periods,
+                            "invalid_installment", "Only installments may specify a current period, from 1 to the total.");
         var installmentId = split ? Guid.NewGuid().ToString("N") : null;
-        var changes = new List<SyncChange>(periods);
-        for (var i = 0; i < periods; i++)
+        var changes = new List<SyncChange>(periods - firstIndex + 1);
+        for (var index = firstIndex; index <= periods; index++)
         {
             var id = Guid.NewGuid().ToString("N");
             var value = new JsonObject
             {
                 ["id"] = id, ["platformId"] = input.PlatformId, ["title"] = title,
-                ["month"] = start.AddMonths(i).ToString("yyyy-MM", CultureInfo.InvariantCulture),
+                ["month"] = start.AddMonths(index - firstIndex).ToString("yyyy-MM", CultureInfo.InvariantCulture),
                 ["amountCents"] = input.AmountCents, ["kind"] = input.Kind,
                 ["status"] = input.Kind == "estimate" ? "estimated" : "due",
-                ["installmentIndex"] = split ? JsonValue.Create(i + 1) : null,
+                ["installmentIndex"] = split ? JsonValue.Create(index) : null,
                 ["installmentCount"] = split ? JsonValue.Create(periods) : null
             };
             if (installmentId is not null) value["installmentId"] = installmentId;

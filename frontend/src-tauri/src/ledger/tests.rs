@@ -18,6 +18,7 @@ fn bill(platform: &str, title: &str, month: &str, amount_cents: i64, kind: &str)
         deposit_cents: None,
         kind: kind.to_owned(),
         installment_count: 1,
+        installment_index: None,
     }
 }
 
@@ -256,6 +257,34 @@ fn a_failed_installment_rolls_back_the_whole_purchase() {
     order.installment_count = 3;
     assert!(add_bill(&mut db, order).is_err());
     assert!(snapshot(&mut db).unwrap().entries.is_empty());
+}
+
+#[test]
+fn invalid_billed_periods_roll_back_earlier_bills_and_their_outbox() {
+    let mut db = database();
+    let platform = add_platform(&db, "测试平台").unwrap();
+    db.execute_batch("INSERT INTO sync_binding VALUES(1,'https://example.invalid','test',1);")
+        .unwrap();
+    assert!(add_bills(&mut db, &[]).is_err());
+    for (kind, month, index) in [
+        ("single", "2026-12", 1),
+        ("estimate", "2026-12", 1),
+        ("installment", "2026-12", 0),
+        ("installment", "2026-12", 4),
+        ("installment", "1900-01", 2),
+        ("installment", "2099-12", 2),
+    ] {
+        let valid = bill(&platform, "第一笔", "2026-12", 100, "single");
+        let mut invalid = bill(&platform, "第二笔", month, 200, kind);
+        invalid.installment_count = 3;
+        invalid.installment_index = Some(index);
+        assert!(add_bills(&mut db, &[valid, invalid]).is_err());
+        assert!(snapshot(&mut db).unwrap().entries.is_empty());
+        let outbox: i64 = db
+            .query_row("SELECT count(*) FROM sync_queue", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(outbox, 0);
+    }
 }
 
 #[test]
