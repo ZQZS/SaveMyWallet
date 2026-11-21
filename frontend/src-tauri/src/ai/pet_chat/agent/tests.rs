@@ -142,12 +142,20 @@ fn action_tools_are_offered_by_scope_and_only_declared_calls_return_to_pi() {
     let reminder = wire("schedule_pet_popup", json!({"delaySeconds":600}));
     assert!(parse_reply(&reminder, ChatMode::Pet, &no_rows).is_ok());
     assert!(parse_reply(&reminder, ChatMode::Pet, &read_only).is_err());
-    let monthly_args =
-        json!({"recurrence":{"frequency":"monthly","dayOfMonth":10,"time":"09:00"},"text":"还款"});
-    let monthly = wire("schedule_pet_notification", monthly_args.clone());
-    for mode in [ChatMode::General, ChatMode::Pet] {
-        let accepted = parse_reply(&monthly, mode, &no_rows).unwrap();
-        assert_eq!(accepted.calls[0].arguments, monthly_args);
+    for name in ["show_pet_popup", "send_pet_notification"] {
+        let test = wire(name, json!({"testOnly":true,"text":"吃饭"}));
+        assert!(parse_reply(&test, ChatMode::Pet, &no_rows).is_ok());
+    }
+    for args in [
+        json!({"recurrence":{"frequency":"monthly","dayOfMonth":10,"time":"09:00"},"text":"还款"}),
+        json!({"recurrence":{"frequency":"interval","minutes":20},"text":"喝水"}),
+        json!({"recurrence":{"frequency":"randomWindow","startTime":"22:00","endTime":"23:00"},"text":"睡觉"}),
+    ] {
+        let call = wire("schedule_pet_notification", args.clone());
+        for mode in [ChatMode::General, ChatMode::Pet] {
+            let accepted = parse_reply(&call, mode, &no_rows).unwrap();
+            assert_eq!(accepted.calls[0].arguments, args);
+        }
     }
     assert!(parse_reply(&action, ChatMode::General, &read_only).is_err());
     assert!(parse_reply(&action, ChatMode::General, &no_rows).is_err());
@@ -165,10 +173,19 @@ fn action_tools_are_offered_by_scope_and_only_declared_calls_return_to_pi() {
     for invalid in [
         wire("mark_bills_paid", json!({"ids":["private-id"]})),
         wire("reset_ledger", json!({})),
+        wire("schedule_pet_notification", json!({"delaySeconds":600,"testOnly":true})),
         wire("void_bills", json!("all")),
         wire(
             "send_pet_notification",
             json!({"recurrence":{"frequency":"daily","time":"09:00"}}),
+        ),
+        wire(
+            "schedule_pet_popup",
+            json!({"recurrence":{"frequency":"interval","minutes":20,"anchorAt":1}}),
+        ),
+        wire(
+            "schedule_pet_notification",
+            json!({"recurrence":{"frequency":"randomWindow","startTime":"11:30","endTime":"13:00","seed":42}}),
         ),
     ] {
         assert!(parse_reply(&invalid, ChatMode::Pet, &all).is_err());

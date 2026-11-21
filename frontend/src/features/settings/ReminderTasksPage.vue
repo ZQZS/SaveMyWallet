@@ -4,13 +4,13 @@ import { Bell, MessageCircle, Plus } from 'lucide-vue-next'
 import { displayError, locale, t } from '../../i18n'
 import { usePets } from '../pets/usePets'
 import { parseLocalReminderTime } from '../reminders/reminderActions'
-import { parseReminderRecurrence, type ReminderRecurrence } from '../reminders/recurrence'
+import { createIntervalRecurrence, createRandomWindowRecurrence, MAX_INTERVAL_MINUTES, parseReminderRecurrence, type ReminderRecurrence } from '../reminders/recurrence'
 import { formatReminderRecurrence } from '../reminders/recurrenceFormat'
 import { useReminders } from '../reminders/useReminders'
 import type { ReminderTask } from '../reminders/reminderService'
 import SettingsPageFrame from './SettingsPageFrame.vue'
 
-const { tasks, ready, error, create, edit, cancel, remove, refresh } = useReminders()
+const { tasks, ready, error, create, edit, cancel, remove, refresh, test } = useReminders()
 const { activePet, characters } = usePets()
 const formOpen = ref(false)
 const original = shallowRef<ReminderTask | null>(null)
@@ -21,12 +21,21 @@ const subject = ref('')
 const channel = ref<'popup' | 'notification'>('popup')
 const timing = ref<'now' | 'later'>('now')
 const time = ref('')
-const frequencies = ['once', 'daily', 'weekly', 'monthly'] as const
+const frequencies = ['once', 'afterMinutes', 'interval', 'daily', 'weekly', 'monthly', 'randomWindow'] as const
 const frequency = ref<typeof frequencies[number]>('once')
+const minuteChoices = [10, 20, 30]
+const minutes = ref<number | ''>(10)
+const presets = [
+  { name: 'lunch', startTime: '11:30', endTime: '13:00' },
+  { name: 'bedtime', startTime: '22:00', endTime: '23:00' },
+] as const
+const startTime = ref<string>(presets[0].startTime)
+const endTime = ref<string>(presets[0].endTime)
+let randomSeed: number | undefined
 const clock = ref('09:00')
 const weekday = ref(1)
 const dayOfMonth = ref<number | ''>(1)
-const saving = ref(false)
+const formAction = ref<'save' | 'test' | null>(null)
 const changing = ref<number | null>(null)
 const feedback = ref('')
 const formError = ref('')
@@ -72,7 +81,11 @@ function openForm(task: ReminderTask | null = null, opener?: Event) {
   time.value = task ? localInputValue(task.at) : ''
   const rule = task?.recurrence
   frequency.value = rule?.frequency ?? 'once'
-  clock.value = rule?.time ?? (task ? time.value.slice(11) : '09:00')
+  clock.value = rule && 'time' in rule ? rule.time : (task ? time.value.slice(11) : '09:00')
+  minutes.value = rule?.frequency === 'interval' ? rule.minutes : 10
+  startTime.value = rule?.frequency === 'randomWindow' ? rule.startTime : presets[0].startTime
+  endTime.value = rule?.frequency === 'randomWindow' ? rule.endTime : presets[0].endTime
+  randomSeed = rule?.frequency === 'randomWindow' ? rule.seed : undefined
   weekday.value = rule?.frequency === 'weekly' ? rule.weekday : anchor.getDay() || 7
   dayOfMonth.value = rule?.frequency === 'monthly' ? rule.dayOfMonth : anchor.getDate()
   formError.value = ''
@@ -86,23 +99,54 @@ function closeForm() {
   original.value = null
   void nextTick(() => (editButton?.isConnected ? editButton : addButton.value)?.focus())
 }
+function applyPreset(preset: typeof presets[number]) {
+  startTime.value = preset.startTime
+  endTime.value = preset.endTime
+  if (!subject.value.trim() || presets.some(item => subject.value === t('reminders.subject.' + item.name))) {
+    subject.value = t('reminders.subject.' + preset.name)
+  }
+}
+function readMinutes(): number {
+  const value = minutes.value
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 10 || value % 10 !== 0) {
+    throw new Error('REMINDER_INVALID_MINUTES')
+  }
+  return value
+}
 function readRule(): ReminderRecurrence | undefined {
-  if (timing.value === 'now' || frequency.value === 'once') return
+  if (timing.value === 'now' || frequency.value === 'once' || frequency.value === 'afterMinutes') return
+  const previous = original.value?.recurrence
+  if (frequency.value === 'interval') {
+    const count = readMinutes()
+    if (previous?.frequency === 'interval' && previous.minutes === count) return previous
+    return createIntervalRecurrence(count, Date.now())
+  }
+  if (frequency.value === 'randomWindow') {
+    if (startTime.value === endTime.value) throw new Error('REMINDER_EMPTY_WINDOW')
+    if (previous?.frequency === 'randomWindow' && previous.startTime === startTime.value && previous.endTime === endTime.value) return previous
+    const rule = createRandomWindowRecurrence(startTime.value, endTime.value, randomSeed)
+    randomSeed = rule.seed
+    return rule
+  }
   const rule = { frequency: frequency.value, time: clock.value }
   if (frequency.value === 'weekly') return parseReminderRecurrence({ ...rule, weekday: weekday.value })
   if (frequency.value === 'monthly') return parseReminderRecurrence({ ...rule, dayOfMonth: dayOfMonth.value })
   return parseReminderRecurrence(rule)
 }
 async function submit() {
-  if (saving.value) return
+  if (formAction.value) return
   formError.value = ''
   feedback.value = ''
-  saving.value = true
+  formAction.value = 'save'
   try {
     const previous = original.value
     const recurrence = readRule()
     let at: number | undefined
-    if (timing.value === 'later' && !recurrence) {
+    if (recurrence && recurrence === previous?.recurrence && previous.at > Date.now()) {
+      at = previous.at
+    } else if (timing.value === 'later' && frequency.value === 'afterMinutes') {
+      at = Date.now() + readMinutes() * 60_000
+    } else if (timing.value === 'later' && !recurrence) {
       // Preserve seconds on a Pi-created one-off when only its subject is edited.
       at = previous && !previous.recurrence && time.value === localInputValue(previous.at)
         ? previous.at : parseLocalReminderTime(time.value)
@@ -120,7 +164,21 @@ async function submit() {
   } catch (cause) {
     formError.value = displayError(cause)
   } finally {
-    saving.value = false
+    formAction.value = null
+  }
+}
+async function testReminder() {
+  if (formAction.value) return
+  formAction.value = 'test'
+  formError.value = ''
+  feedback.value = ''
+  try {
+    await test({ channel: channel.value, text: subject.value, pet: savedPet.value })
+    feedback.value = channel.value === 'popup' ? 'reminders.testedPopup' : 'reminders.testedNotification'
+  } catch (cause) {
+    formError.value = displayError(cause)
+  } finally {
+    formAction.value = null
   }
 }
 async function change(task: ReminderTask) {
@@ -155,7 +213,7 @@ async function change(task: ReminderTask) {
         </button>
       </div>
       <form v-if="formOpen" class="reminder-form" :aria-label="t(original ? 'reminders.edit' : 'reminders.add')" @submit.prevent="submit">
-        <fieldset :disabled="saving">
+        <fieldset :disabled="!!formAction">
           <h3 v-if="original">{{ t('reminders.edit') }}</h3>
           <label class="field">
             <span>{{ t('reminders.subject') }}</span>
@@ -183,6 +241,37 @@ async function change(task: ReminderTask) {
               <span>{{ t('reminders.localTime') }}</span>
               <input v-model="time" type="datetime-local" name="at" required />
             </label>
+            <div v-else-if="frequency === 'interval' || frequency === 'afterMinutes'" class="minute-fields">
+              <label class="field">
+                <span>{{ t(frequency === 'interval' ? 'reminders.intervalMinutes' : 'reminders.delayMinutes') }}</span>
+                <input v-model.number="minutes" type="number" name="minutes" inputmode="numeric" min="10"
+                  :max="frequency === 'interval' ? MAX_INTERVAL_MINUTES : undefined" step="10" required aria-describedby="minute-step" />
+                <small id="minute-step" class="settings-muted">{{ t(frequency === 'interval' ? 'reminders.intervalStep' : 'reminders.delayStep') }}</small>
+              </label>
+              <div class="shortcuts">
+                <button v-for="amount in minuteChoices" :key="amount" type="button" class="settings-button"
+                  :data-minutes="amount" :aria-pressed="minutes === amount" @click="minutes = amount">
+                  {{ t('reminders.minutes', { minutes: amount }) }}
+                </button>
+              </div>
+            </div>
+            <template v-else-if="frequency === 'randomWindow'">
+              <div class="shortcuts" role="group" :aria-label="t('reminders.presets')">
+                <button v-for="preset in presets" :key="preset.name" type="button" class="settings-button" name="preset"
+                  :value="preset.name" @click="applyPreset(preset)">{{ t('reminders.preset.' + preset.name) }}</button>
+              </div>
+              <div class="window-times">
+                <label class="field">
+                  <span>{{ t('reminders.windowStart') }}</span>
+                  <input v-model="startTime" type="time" name="startTime" required />
+                </label>
+                <label class="field">
+                  <span>{{ t(startTime && endTime && endTime < startTime ? 'reminders.windowEndNextDay' : 'reminders.windowEnd') }}</span>
+                  <input v-model="endTime" type="time" name="endTime" required />
+                </label>
+              </div>
+              <p class="settings-muted">{{ t('reminders.windowHint') }}</p>
+            </template>
             <template v-else>
               <label v-if="frequency === 'weekly'" class="field">
                 <span>{{ t('reminders.weekday') }}</span>
@@ -209,7 +298,8 @@ async function change(task: ReminderTask) {
           </div>
           <p v-if="formError" class="settings-error" role="alert">{{ formError }}</p>
           <div class="settings-actions">
-            <button type="submit" class="settings-button primary">{{ t(saving ? 'reminders.saving' : original ? 'reminders.saveChanges' : timing === 'later' ? 'reminders.schedule' : 'reminders.send') }}</button>
+            <button type="submit" class="settings-button primary">{{ t(formAction === 'save' ? 'reminders.saving' : original ? 'reminders.saveChanges' : timing === 'later' ? 'reminders.schedule' : 'reminders.send') }}</button>
+            <button type="button" class="settings-button" name="testReminder" @click="testReminder">{{ t(formAction === 'test' ? 'reminders.testing' : 'reminders.test') }}</button>
             <button type="button" class="settings-button" @click="closeForm">{{ t(original ? 'reminders.cancelChanges' : 'reminders.closeForm') }}</button>
           </div>
         </fieldset>
@@ -253,6 +343,10 @@ async function change(task: ReminderTask) {
 .field > span, .choices legend { font-size: .88rem; font-weight: 650; }
 .field textarea, .field input, .field select { margin: 0; width: 100%; min-width: 0; max-width: 100%; min-height: 44px; border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; background: var(--paper); color: var(--ink); font: inherit; }
 .field textarea { resize: vertical; }
+.minute-fields { display: grid; gap: 8px; }
+.shortcuts { display: flex; flex-wrap: wrap; gap: 8px; }
+.shortcuts [aria-pressed="true"] { border-color: var(--green); color: var(--green); }
+.window-times { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr)); gap: 12px; }
 .choices label { display: inline-flex; align-items: center; gap: 7px; min-height: 44px; margin-inline-end: 16px; cursor: pointer; }
 .choices input { accent-color: var(--accent-solid); }
 .companion-info { display: grid; gap: 2px; font-size: .88rem; }

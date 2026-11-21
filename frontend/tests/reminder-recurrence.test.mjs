@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { after, test } from 'node:test'
-import { nextReminderOccurrence, parseReminderRecurrence, previousReminderOccurrence } from '../src/features/reminders/recurrence.ts'
+import { createIntervalRecurrence, createRandomWindowRecurrence, inReminderWindow, nextReminderOccurrence,
+  parseReminderRecurrence, previousReminderOccurrence, reminderOccurrenceDay, reminderWindowExpiresAt } from '../src/features/reminders/recurrence.ts'
 
 const oldZone = process.env.TZ
 process.env.TZ = 'America/New_York'
@@ -98,4 +99,63 @@ test('rejects invalid stored or proposed recurrence fields and out-of-range inst
   for (const invalidTime of [NaN, Infinity, Number.MAX_SAFE_INTEGER]) {
     assert.throws(() => nextReminderOccurrence(daily, invalidTime), /REMINDER_INVALID_TIME/)
   }
+})
+
+test('elapsed intervals anchor at a whole second, advance arithmetically and keep their cadence through DST', () => {
+  const rule = createIntervalRecurrence(20, Date.parse('2026-03-08T01:43:10.450-05:00'))
+  assert.equal(rule.anchorAt, Date.parse('2026-03-08T03:03:11-04:00'))
+  next(rule, '2026-03-08T01:43:10-05:00', '2026-03-08T03:03:11-04:00')
+  next(rule, '2026-03-08T03:03:11-04:00', '2026-03-08T03:23:11-04:00')
+  previous(rule, '2026-12-11T11:23:11-05:00', '2026-12-11T11:23:11-05:00')
+  assert.throws(() => previousReminderOccurrence(rule, rule.anchorAt - 1), /REMINDER_INVALID_TIME/)
+  assert.equal(reminderOccurrenceDay(rule, rule.anchorAt), undefined)
+  assert.equal(createIntervalRecurrence(44640, 0).anchorAt, 31 * 86400_000)
+  for (const minutes of [0, 5, 11, 10.2, 44650, '20']) assert.throws(() => createIntervalRecurrence(minutes, 0))
+  for (const patch of [{ anchorAt: NaN }, { anchorAt: 0 }, { anchorAt: -1000 }, { anchorAt: rule.anchorAt + 1 }, { time: '00:00' }]) {
+    assert.throws(() => parseReminderRecurrence({ ...rule, ...patch }))
+  }
+})
+
+test('random windows reconstruct the selected minute from their saved seed and starting day', () => {
+  const lunch = createRandomWindowRecurrence('11:30', '13:00', 42)
+  assert.deepEqual(parseReminderRecurrence(JSON.parse(JSON.stringify(lunch))), lunch)
+  next(lunch, '2026-11-22T00:00', '2026-11-22T11:56')
+  previous(lunch, '2026-11-22T11:56', '2026-11-22T11:56')
+  const night = createRandomWindowRecurrence('23:00', '01:00', 42)
+  next(night, '2026-11-22T22:00', '2026-11-22T23:55')
+  next(night, '2026-11-23T22:00', '2026-11-24T00:44')
+  next(night, '2026-11-24T00:10', '2026-11-24T00:44')
+  previous(night, '2026-11-24T00:10', '2026-11-22T23:55')
+  const selected = Date.parse('2026-11-24T00:44')
+  assert.equal(reminderOccurrenceDay(night, selected), '2026-11-23')
+  assert.equal(inReminderWindow(night, selected, Date.parse('2026-11-24T01:00:59.999')), true)
+  assert.equal(inReminderWindow(night, selected, Date.parse('2026-11-24T01:01')), false)
+  assert.equal(inReminderWindow(night, selected, Date.parse('2026-11-24T23:00')), false)
+  for (const patch of [{ startTime: '13:00' }, { endTime: '24:00' }, { seed: -1 }, { seed: 2147483648 },
+    { seed: 0.5 }, { seed: '42' }, { time: '12:00' }]) assert.throws(() => parseReminderRecurrence({ ...lunch, ...patch }))
+})
+
+test('random windows skip missing spring times and choose the first fall overlap', () => {
+  const gap = createRandomWindowRecurrence('02:00', '02:59', 42)
+  const afterGap = new Date(nextReminderOccurrence(gap, Date.parse('2026-03-08T00:00:00-05:00')))
+  assert.equal(afterGap.getDate(), 9)
+  assert.equal(afterGap.getHours(), 2)
+  const fold = createRandomWindowRecurrence('01:20', '01:55', 0)
+  const earlier = nextReminderOccurrence(fold, Date.parse('2026-11-01T00:00:00-04:00'))
+  assert.equal(new Date(earlier).getTimezoneOffset(), 240)
+  assert.equal(previousReminderOccurrence(fold, Date.parse('2026-11-01T01:01:00-05:00')), earlier)
+  assert.equal(new Date(nextReminderOccurrence(fold, earlier)).getDate(), 2)
+})
+
+test('a random popup expiry follows the inclusive end minute through midnight and DST transitions', () => {
+  const expiry = (start, end, open, observed, closed) => {
+    const rule = createRandomWindowRecurrence(start, end, 0)
+    assert.equal(reminderWindowExpiresAt(rule, Date.parse(open), Date.parse(observed)), Date.parse(closed))
+  }
+  expiry('23:00', '01:00', '2026-11-25T23:28', '2026-11-25T23:29:12', '2026-11-26T01:01')
+  expiry('01:00', '02:30', '2026-03-08T01:45:00-05:00', '2026-03-08T01:59:00-05:00', '2026-03-08T03:00:00-04:00')
+  // The fold moves the device back before this window's start.
+  expiry('01:40', '03:00', '2026-11-01T01:45:00-04:00', '2026-11-01T01:45:00-04:00', '2026-11-01T01:00:00-05:00')
+  // A window covering the entire fold ends in standard time, an hour after the nominal duration.
+  expiry('00:00', '02:30', '2026-11-01T00:45:00-04:00', '2026-11-01T00:45:00-04:00', '2026-11-01T02:31:00-05:00')
 })

@@ -6,7 +6,6 @@ import { contentText } from '@earendil-works/pi-ai/utils/text'
 import { validateToolCall } from '@earendil-works/pi-ai/utils/validation'
 import actionDefinitions from '../../../resources/ai/ledger-action-tools.json' with { type: 'json' }
 import type { LedgerActionName } from '../../features/ai/ledgerActions.ts'
-import { parseReminderRecurrence } from '../../features/reminders/recurrence.ts'
 import { isReminderAction, type ReminderActionName } from '../../features/reminders/reminderActions.ts'
 import { petChatDetailsPayload, type PetChatDetails } from '../../features/pets/petChatDetails.ts'
 import { requestAgentTurn, type PetChatInput } from './deepseek.ts'
@@ -132,7 +131,11 @@ export async function chatWithAgent(input: AgentChatInput, signal: AbortSignal, 
             : args
           const fields = Object.keys(normalized).sort().map(key => {
             const value = normalized[key]
-            if (key === 'recurrence') return [key, parseReminderRecurrence(value)]
+            if (key === 'recurrence') {
+              // Dedupe the model's request before the approval card obtains a device-generated seed.
+              const rule = value as Record<string, unknown>
+              return [key, Object.keys(rule).sort().map(field => [field, rule[field]])]
+            }
             return [key, key === 'rows' && Array.isArray(value) ? [...value].sort((a, b) => a - b) : value]
           })
           const key = JSON.stringify([definition.name, fields])
@@ -156,7 +159,11 @@ export async function chatWithAgent(input: AgentChatInput, signal: AbortSignal, 
       if (reply.calls.length && rounds.length >= 4) throw new Error('AI_BAD_RESPONSE')
       // Validate the whole batch before a valid sibling is allowed to start a write.
       try {
-        for (const call of reply.calls) validateToolCall(tools, { ...call, type: 'toolCall' })
+        for (const call of reply.calls) {
+          const args = validateToolCall(tools, { ...call, type: 'toolCall' })
+          if (isReminderAction(call.name) && args.recurrence?.frequency === 'randomWindow'
+              && args.recurrence.startTime === args.recurrence.endTime) throw new Error('REMINDER_INVALID_TIME')
+        }
       } catch {
         throw new Error('AI_BAD_RESPONSE')
       }

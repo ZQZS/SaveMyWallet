@@ -345,13 +345,19 @@ pub(super) fn cancel(config: &Config, id: i32) -> Result<(), String> {
     commit_schedule(tx, &folder, &name, None)
 }
 
+#[derive(Default)]
+struct DeliveryPlan {
+    message: Option<(String, String)>,
+    next_window: Option<DateTime<Local>>,
+}
+
 fn claim_delivery(
     tx: &Transaction<'_>,
     id: i32,
     at: i64,
     token: Option<i64>,
     now: DateTime<Local>,
-) -> Result<Option<(String, String)>, String> {
+) -> Result<DeliveryPlan, String> {
     let row = tx
         .query_row(
             "SELECT title, body, rule, first_day, last_day FROM pending p
@@ -362,24 +368,33 @@ fn claim_delivery(
                     r.get::<_, String>(0)?,
                     r.get::<_, String>(1)?,
                     r.get::<_, Option<String>>(2)?,
-                    r.get::<_, Option<i32>>(3)?,
-                    r.get::<_, Option<i32>>(4)?,
+                    r.get::<_, Option<i64>>(3)?,
+                    r.get::<_, Option<i64>>(4)?,
                 ))
             },
         )
         .optional()
         .map_err(|_| DELIVERY)?;
     let Some((title, body, rule, first_day, last_day)) = row else {
-        return Ok(None);
+        return Ok(DeliveryPlan::default());
     };
+    let mut plan = DeliveryPlan::default();
     if let Some(rule) = rule {
         let rule: ReminderRecurrence = serde_json::from_str(&rule).map_err(|_| DELIVERY)?;
-        let Some(slot) = rule.latest_slot(now, first_day.ok_or(DELIVERY)?)? else {
-            return Ok(None);
-        };
-        if last_day.is_some_and(|last| last >= slot) {
-            return Ok(None);
+        let first = first_day.ok_or(DELIVERY)?;
+        let slot = rule.latest_slot(now, first)?;
+        let unseen = slot.filter(|slot| last_day.is_none_or(|last| *slot > last));
+        if let Some(window) = rule.window()? {
+            // The launch boundary remains local when travelling. After sleep, an outdated
+            // boundary may land before today's draw or after the window. Rearm in both cases.
+            let minimum = unseen
+                .or(last_day)
+                .map_or(first, |last| first.max(last.saturating_add(1)));
+            plan.next_window = Some(window.next(&now, minimum)?);
         }
+        let Some(slot) = unseen else {
+            return Ok(plan);
+        };
         tx.execute(
             "UPDATE registrations SET last_day = ?1 WHERE id = ?2",
             params![slot, id],
@@ -392,7 +407,33 @@ fn claim_delivery(
         tx.execute("DELETE FROM pending WHERE id = ?1", [id])
             .map_err(|_| DELIVERY)?;
     }
-    Ok(Some((title, body)))
+    plan.message = Some((title, body));
+    Ok(plan)
+}
+
+fn rearm_window(
+    config: &Config,
+    id: i32,
+    at: i64,
+    token: i64,
+    next: DateTime<Local>,
+) -> Result<(), String> {
+    let _apartment = Apartment::enter()?;
+    // Keep the interface in a local: Rust 2021 tail-expression temporaries can outlive
+    // the apartment guard and call IUnknown::Release after CoUninitialize.
+    let folder = task_folder()?;
+    let name = task_name(config, id)?;
+    let exe = env::current_exe().map_err(|_| DELIVERY)?;
+    let trigger = calendar::window_trigger(next);
+    let xml = BSTR::from(task_xml(
+        id,
+        at,
+        token,
+        exe.to_str().ok_or(DELIVERY)?,
+        &trigger,
+        true,
+    ));
+    set_task(&folder, &name, Some(&xml))
 }
 
 fn deliver_pending(config: &Config, id: i32, at: i64, token: Option<i64>) -> Result<(), String> {
@@ -401,12 +442,17 @@ fn deliver_pending(config: &Config, id: i32, at: i64, token: Option<i64>) -> Res
     let tx = db
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|_| DELIVERY)?;
-    let delivered = match claim_delivery(&tx, id, at, token, Local::now())? {
+    let plan = claim_delivery(&tx, id, at, token, Local::now())?;
+    let rearmed = match plan.next_window {
+        Some(next) => rearm_window(config, id, at, token.ok_or(DELIVERY)?, next),
+        None => Ok(()),
+    };
+    let delivered = match plan.message {
         Some((title, body)) => notify(config, id, &title, &body),
         None => Ok(()),
     };
     tx.commit().map_err(|_| DELIVERY)?;
-    delivered
+    delivered.and(rearmed)
 }
 
 fn parse_helper_args(
@@ -488,7 +534,7 @@ mod tests {
         init_delivery_db(&db).unwrap(); // An old first occurrence does not expire a recurring registration.
         let tx = db.transaction().unwrap();
         let later = Local.with_ymd_and_hms(2026, 3, 20, 20, 0, 0).unwrap();
-        let claim = |token, clock| claim_delivery(&tx, 1, at, token, clock).unwrap();
+        let claim = |token, clock| claim_delivery(&tx, 1, at, token, clock).unwrap().message;
         assert!(claim(None, later).is_none());
         assert!(claim(Some(123), later).is_some());
         assert!(claim(Some(123), later).is_none());
@@ -511,6 +557,40 @@ mod tests {
     }
 
     #[test]
+    fn window_helpers_rearm_after_missed_days_and_keep_stale_edits_and_cancelled_ids_inert() {
+        let mut db = Connection::open_in_memory().unwrap();
+        init_delivery_db(&db).unwrap();
+        let local = |day, h, m| Local.with_ymd_and_hms(2026, 11, day, h, m, 0).unwrap();
+        let first = local(22, 23, 55);
+        let at = first.timestamp_millis();
+        let slot = first.date_naive().num_days_from_ce();
+        db.execute("INSERT INTO pending VALUES (1,?1,'pet','sleep')", [at])
+            .unwrap();
+        db.execute(
+            "INSERT INTO registrations VALUES (1,7,?1,?2,NULL)",
+            params![
+                r#"{"frequency":"randomWindow","startTime":"23:00","endTime":"01:00","seed":42}"#,
+                slot
+            ],
+        )
+        .unwrap();
+        let tx = db.transaction().unwrap();
+        let claim = |token, now| claim_delivery(&tx, 1, at, Some(token), now).unwrap();
+        let first_plan = claim(7, first);
+        assert!(first_plan.message.is_some());
+        assert_eq!(first_plan.next_window, Some(local(24, 0, 44)));
+        assert!(claim(7, local(23, 0, 15)).message.is_none());
+        let missed = claim(7, local(24, 15, 0));
+        assert!(missed.message.is_none());
+        assert!(missed.next_window.unwrap() > local(24, 15, 0));
+        tx.execute("UPDATE registrations SET token=8 WHERE id=1", [])
+            .unwrap();
+        assert!(claim(7, local(24, 15, 0)).next_window.is_none());
+        tx.execute("DELETE FROM pending WHERE id=1", []).unwrap();
+        assert!(claim(8, local(24, 15, 0)).next_window.is_none());
+    }
+
+    #[test]
     #[ignore = "creates and cleans up one temporary Windows Task Scheduler registration"]
     fn failed_database_commit_restores_the_actual_windows_calendar_task() {
         let _com = Apartment::enter().unwrap();
@@ -519,7 +599,13 @@ mod tests {
             .prefix("SMW-Repeat-QA-")
             .tempdir()
             .unwrap();
-        let name = BSTR::from(probe.path().file_name().unwrap().to_str().unwrap());
+        let mut config = Config {
+            identifier: "SMW-Repeat-QA".into(),
+            ..Config::default()
+        };
+        config.app.app_directories_override =
+            Some(AppDirectoriesOverride::Root(probe.path().into()));
+        let name = task_name(&config, 1).unwrap();
         assert!(current_task(&folder, &name).unwrap().is_none());
         struct Cleanup<'a>(&'a ITaskFolder, &'a BSTR);
         impl Drop for Cleanup<'_> {
@@ -562,6 +648,33 @@ mod tests {
             },
             333,
         );
+        let interval = rule_xml(
+            ReminderRecurrence::Interval {
+                minutes: 20,
+                anchor_at: at,
+            },
+            444,
+        );
+        let window = ReminderRecurrence::RandomWindow {
+            start_time: "11:30".into(),
+            end_time: "13:00".into(),
+            seed: 42,
+        };
+        let next = window
+            .window()
+            .unwrap()
+            .unwrap()
+            .next(&first, i64::MIN)
+            .unwrap();
+        let (trigger, _) = window.trigger(next.timestamp_millis()).unwrap();
+        let random = BSTR::from(task_xml(
+            1,
+            next.timestamp_millis(),
+            555,
+            exe.to_str().unwrap(),
+            &trigger,
+            true,
+        ));
         let mut db = Connection::open_in_memory().unwrap();
         init_delivery_db(&db).unwrap();
         db.execute("CREATE TABLE bad_parent (id INTEGER REFERENCES pending(id) DEFERRABLE INITIALLY DEFERRED)", []).unwrap();
@@ -574,6 +687,29 @@ mod tests {
         assert!(current_task(&folder, &name).unwrap().is_none());
         set_task(&folder, &name, Some(&daily)).unwrap();
         set_task(&folder, &name, Some(&monthly)).unwrap();
+        set_task(&folder, &name, Some(&interval)).unwrap();
+        assert!(current_task(&folder, &name)
+            .unwrap()
+            .unwrap()
+            .to_string()
+            .contains("<Interval>PT20M</Interval>"));
+        set_task(&folder, &name, Some(&random)).unwrap();
+        assert!(current_task(&folder, &name)
+            .unwrap()
+            .unwrap()
+            .to_string()
+            .contains("555</Arguments>"));
+        // A standalone helper starts without a COM apartment. Exercise its full
+        // initialization, task update and interface cleanup on a fresh OS thread.
+        std::thread::spawn(move || rearm_window(&config, 1, at, 777, next))
+            .join()
+            .unwrap()
+            .unwrap();
+        assert!(current_task(&folder, &name)
+            .unwrap()
+            .unwrap()
+            .to_string()
+            .contains("777</Arguments>"));
         set_task(&folder, &name, Some(&weekly)).unwrap();
         fail_commit(&mut db, Some(&monthly));
         assert!(current_task(&folder, &name)

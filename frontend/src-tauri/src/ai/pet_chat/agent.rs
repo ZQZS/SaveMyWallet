@@ -69,11 +69,23 @@ impl ToolCall {
         };
         // Pi validates schema types and the application validates business rules before
         // presenting a preview. The provider transport accepts only declared argument names.
-        let properties = &tool.parameters["properties"];
         !self.id.trim().is_empty()
             && self.id.len() <= 256
-            && args.keys().all(|key| properties.get(key).is_some())
+            && declared_fields(args, &tool.parameters)
     }
+}
+
+fn declared_fields(args: &serde_json::Map<String, Value>, schema: &Value) -> bool {
+    let Some(properties) = schema["properties"].as_object() else {
+        return false;
+    };
+    args.iter().all(|(key, value)| {
+        properties.get(key).is_some_and(|field| {
+            value
+                .as_object()
+                .is_none_or(|nested| declared_fields(nested, field))
+        })
+    })
 }
 
 #[derive(Deserialize)]

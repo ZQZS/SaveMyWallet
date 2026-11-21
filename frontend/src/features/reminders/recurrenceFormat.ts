@@ -2,6 +2,11 @@ import { locale, t } from '../../i18n/index.ts'
 import type { ReminderRecurrence } from './recurrence.ts'
 
 export function formatReminderRecurrence(rule: ReminderRecurrence): string {
+  if (rule.frequency === 'interval') return t('reminderRule.interval', { minutes: rule.minutes })
+  if (rule.frequency === 'randomWindow') {
+    const key = rule.startTime > rule.endTime ? 'reminderRule.randomWindowOvernight' : 'reminderRule.randomWindow'
+    return t(key, { start: rule.startTime, end: rule.endTime })
+  }
   if (rule.frequency === 'weekly') {
     // 2024-01-01 was a Monday, ISO weekday 1.
     const weekday = new Intl.DateTimeFormat(locale.value, {

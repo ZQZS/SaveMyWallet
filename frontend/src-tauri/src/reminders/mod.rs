@@ -20,6 +20,32 @@ pub(super) enum ReminderRecurrence {
         #[serde(rename = "dayOfMonth")]
         day_of_month: u8,
     },
+    Interval {
+        minutes: u16,
+        #[serde(rename = "anchorAt")]
+        anchor_at: i64,
+    },
+    #[serde(rename = "randomWindow")]
+    RandomWindow {
+        #[serde(rename = "startTime")]
+        start_time: String,
+        #[serde(rename = "endTime")]
+        end_time: String,
+        seed: u32,
+    },
+}
+
+fn parse_clock(time: &str) -> Result<chrono::NaiveTime, String> {
+    let bytes = time.as_bytes();
+    if bytes.len() != 5
+        || bytes[2] != b':'
+        || ![bytes[0], bytes[1], bytes[3], bytes[4]]
+            .iter()
+            .all(u8::is_ascii_digit)
+    {
+        return Err(TIME.into());
+    }
+    chrono::NaiveTime::parse_from_str(time, "%H:%M").map_err(|_| TIME.into())
 }
 
 impl ReminderRecurrence {
@@ -36,10 +62,35 @@ impl ReminderRecurrence {
             } => time,
             _ => return Err(TIME.into()),
         };
-        if time.len() != 5 || time.as_bytes()[2] != b':' {
-            return Err(TIME.into());
+        parse_clock(time)
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::Interval { minutes, anchor_at } => {
+                if !(10..=44640).contains(minutes)
+                    || minutes % 10 != 0
+                    || *anchor_at <= 0
+                    || anchor_at % 1000 != 0
+                    || chrono::DateTime::from_timestamp_millis(*anchor_at).is_none()
+                {
+                    return Err(TIME.into());
+                }
+            }
+            Self::RandomWindow {
+                start_time,
+                end_time,
+                seed,
+            } => {
+                if parse_clock(start_time)? == parse_clock(end_time)? || *seed > i32::MAX as u32 {
+                    return Err(TIME.into());
+                }
+            }
+            _ => {
+                self.clock()?;
+            }
         }
-        chrono::NaiveTime::parse_from_str(time, "%H:%M").map_err(|_| TIME.into())
+        Ok(())
     }
 }
 
@@ -62,7 +113,7 @@ pub(super) fn init() -> TauriPlugin<Wry> {
 }
 
 fn validate(id: i32, title: &str, body: &str) -> Result<(), String> {
-    if id <= 0
+    if id < 0
         || [title, body].iter().any(|s| {
             s.trim().is_empty()
                 || s.chars()
@@ -124,11 +175,15 @@ pub(super) fn reminder_schedule(
     recurrence: Option<ReminderRecurrence>,
 ) -> Result<(), String> {
     validate(id, &title, &body)?;
+    // ID 0 is reserved for immediate test notifications. Stored reminders have positive IDs.
+    if id == 0 {
+        return Err(DELIVERY.into());
+    }
     if at <= now_millis() {
         return Err(TIME.into());
     }
     if let Some(rule) = &recurrence {
-        rule.clock()?;
+        rule.validate()?;
     }
     #[cfg(windows)]
     {

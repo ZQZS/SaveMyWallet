@@ -1,6 +1,7 @@
-import { readonly, ref, shallowRef } from 'vue'
+import { computed, readonly, ref, shallowRef } from 'vue'
 import type { PetCharacter } from '../pets/catalog.ts'
-import { nextReminderOccurrence, parseReminderRecurrence, previousReminderOccurrence, type ReminderRecurrence } from './recurrence.ts'
+import { inReminderWindow, nextReminderOccurrence, parseReminderRecurrence, previousReminderOccurrence,
+  reminderOccurrenceDay, type ReminderRecurrence } from './recurrence.ts'
 
 export type ReminderChannel = 'popup' | 'notification'
 export type ReminderStatus = 'preparing' | 'scheduled' | 'editing' | 'completed' | 'cancelling' | 'cancelled' | 'failed'
@@ -68,21 +69,17 @@ function errorCode(cause: unknown, fallback: string) {
   return /^(?:REMINDER_[A-Z_]+|NATIVE_ONLY)$/.test(message) ? message : fallback
 }
 
-function localDay(at: number) {
-  const date = new Date(at)
-  return [date.getFullYear(), date.getMonth() + 1, date.getDate()].map((value, i) =>
-    String(value).padStart(i === 0 ? 4 : 2, '0')).join('-')
-}
-
 function nextUnseen(recurrence: ReminderRecurrence, after: number, lastLocalDay?: string) {
   let next = nextReminderOccurrence(recurrence, after)
   // Travelling west can put the same local date and time in the future again.
-  while (lastLocalDay && localDay(next) <= lastLocalDay) next = nextReminderOccurrence(recurrence, next)
+  if (recurrence.frequency !== 'interval' && lastLocalDay) {
+    while (reminderOccurrenceDay(recurrence, next)! <= lastLocalDay) next = nextReminderOccurrence(recurrence, next)
+  }
   return next
 }
 
 function inCurrentZone(plan: ReminderPlan, timeZone: string) {
-  if (!plan.recurrence || plan.timeZone === timeZone) return plan
+  if (!plan.recurrence || plan.recurrence.frequency === 'interval' || plan.timeZone === timeZone) return plan
   const at = nextUnseen(plan.recurrence, plan.recurrenceAfter ?? plan.at - 1, plan.lastLocalDay)
   return { ...plan, at, timeZone }
 }
@@ -106,6 +103,8 @@ export function createReminderService(services: ReminderServices) {
   const { store, delivery, now, visible } = services
   const tasks = shallowRef<ReminderTask[]>([])
   const activePopup = shallowRef<ReminderTask | null>(null)
+  const testPopup = shallowRef<ReminderTask | null>(null)
+  const shownPopup = computed(() => activePopup.value ?? testPopup.value)
   const ready = ref(false)
   const error = ref('')
   const handedOff = new Map<number, 'scheduled' | 'completed'>()
@@ -231,6 +230,10 @@ export function createReminderService(services: ReminderServices) {
   async function reconcile() {
     const records = (await store.list()).sort((a, b) => a.at - b.at || a.id - b.id)
     const zone = Intl.DateTimeFormat().resolvedOptions().timeZone
+    const open = activePopup.value
+    if (open?.recurrence?.frequency === 'randomWindow' && !inReminderWindow(open.recurrence, open.at, now())) {
+      activePopup.value = null
+    }
     for (let task of records) {
       if (task.status === 'preparing') { await register(task, true); continue }
       if (task.status === 'cancelling') { await finishCancellation(task); continue }
@@ -239,13 +242,15 @@ export function createReminderService(services: ReminderServices) {
       const local = inCurrentZone(task, zone)
       if (local !== task) task = await transition(task, 'scheduled', undefined, { at: local.at, timeZone: zone })
       const time = now()
-      if (task.at > time || (task.channel === 'popup' && (!visible() || activePopup.value))) continue
+      if (task.at > time || (task.channel === 'popup' && (!visible() || shownPopup.value))) continue
       if (task.recurrence) {
         // A recurring system notification is already owned by the OS. For a popup
         // claim the entire overdue interval before displaying one catch-up message.
-        const lastLocalDay = localDay(previousReminderOccurrence(task.recurrence, time))
+        const latest = previousReminderOccurrence(task.recurrence, time)
+        const lastLocalDay = reminderOccurrenceDay(task.recurrence, latest)
         await transition(task, 'scheduled', undefined, { at: nextUnseen(task.recurrence, time, lastLocalDay), recurrenceAfter: time, lastLocalDay })
-        if (task.channel === 'popup') activePopup.value = task
+        const withinWindow = task.recurrence.frequency !== 'randomWindow' || inReminderWindow(task.recurrence, latest, time)
+        if (task.channel === 'popup' && withinWindow) activePopup.value = { ...task, at: latest }
       } else {
         const completed = await transition(task, 'completed')
         if (task.channel === 'popup') activePopup.value = completed
@@ -298,7 +303,7 @@ export function createReminderService(services: ReminderServices) {
       const pendingEdit: ReminderPlan = { ...plan, ...wording }
       if (current.lastLocalDay && plan.recurrence && JSON.stringify(current.recurrence) === JSON.stringify(plan.recurrence)) {
         pendingEdit.lastLocalDay = current.lastLocalDay
-        if (localDay(plan.at) <= current.lastLocalDay) pendingEdit.at = nextUnseen(plan.recurrence, now(), current.lastLocalDay)
+        pendingEdit.at = nextUnseen(plan.recurrence, plan.at - 1, current.lastLocalDay)
       }
       try {
         const task = await transition(current, 'editing', undefined, { pendingEdit })
@@ -338,11 +343,21 @@ export function createReminderService(services: ReminderServices) {
     })
   }
 
+  async function test({ channel, text, pet }: Pick<ReminderInput, 'channel' | 'text' | 'pet'>) {
+    const createdAt = now()
+    const plan = planInput({ channel, text }, createdAt)
+    const wording = await services.prepareText(plan.text, pet)
+    // IndexedDB assigns positive task IDs. Zero identifies only the transient test.
+    if (channel === 'notification') await delivery.notify(0, wording.petName, wording.message)
+    else testPopup.value = { ...plan, ...wording, id: 0, createdAt, status: 'completed' }
+  }
+
   function dismissPopup() {
-    activePopup.value = null
+    if (activePopup.value) activePopup.value = null
+    else testPopup.value = null
     return refresh()
   }
 
-  return { tasks: readonly(tasks), ready: readonly(ready), error: readonly(error), activePopup: readonly(activePopup),
-    refresh, create, edit, cancel, remove, dismissPopup }
+  return { tasks: readonly(tasks), ready: readonly(ready), error: readonly(error), activePopup: readonly(shownPopup),
+    refresh, create, edit, cancel, remove, test, dismissPopup }
 }

@@ -3,6 +3,7 @@ import { nativeDelivery } from './nativeDelivery.ts'
 import { createReminderService } from './reminderService.ts'
 import { reminderStore } from './reminderStore.ts'
 import { prepareReminderText } from './reminderWording.ts'
+import { reminderWindowExpiresAt } from './recurrence.ts'
 
 let broadcasts: BroadcastChannel | undefined
 const visible = () => document.visibilityState === 'visible'
@@ -31,11 +32,17 @@ export function startReminders() {
     const due = reminders.tasks.value.filter(task => task.status === 'scheduled'
       && (task.channel === 'notification' || (visible() && !reminders.activePopup.value)))
     const needsRecovery = reminders.tasks.value.some(task => ['editing', 'preparing', 'cancelling'].includes(task.status))
-    if (!due.length && !needsRecovery) return
+    const now = Date.now()
+    const popup = reminders.activePopup.value
+    let delay = Infinity
+    if (popup?.recurrence?.frequency === 'randomWindow') {
+      delay = Math.max(0, reminderWindowExpiresAt(popup.recurrence, popup.at, now) - now)
+    }
     // Re-check periodically for changes to the device clock, including after resume.
-    let delay = needsRecovery ? 30_000 : 60_000
-    for (const task of due) delay = Math.min(delay, Math.max(0, task.at - Date.now()))
-    timer = window.setTimeout(refresh, delay)
+    if (needsRecovery) delay = Math.min(delay, 30_000)
+    if (due.length) delay = Math.min(delay, 60_000)
+    for (const task of due) delay = Math.min(delay, Math.max(0, task.at - now))
+    if (Number.isFinite(delay)) timer = window.setTimeout(refresh, delay)
   }
   const stopWatch = watch([reminders.tasks, reminders.activePopup, reminders.error], arm)
   if (typeof BroadcastChannel !== 'undefined') {

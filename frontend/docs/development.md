@@ -53,6 +53,8 @@ Windows 和安卓共用 Vue、TypeScript、Tauri 2 和 Rust 代码，每台设�
 
 写入失败时，页面显示错误，用户可更正并重试。写入成功但快照读取失败时，账单已持久化，会话保留完成回调，界面提供「重新读取」。恢复时只重读快照并执行一次回调。平台选择器也依靠这个时序，在账单草稿中选中新创建的平台。[会话回归测试](../tests/ledger-session.test.mjs)
 
+提醒任务单独保存在本机。分钟间隔从首次触发的时间戳按实际经过的分钟数递推。每日随机提醒保存起止钟点和随机种子，按时段开始的本地日期计算触发分钟。前端、Windows 投递程序和安卓接收器使用同一组样例验证跨午夜的触发时间。所有渠道共用 31 天的重复间隔上限，以匹配 Windows 任务计划程序。[前端时间计算](../src/features/reminders/recurrence.ts) · [Windows 调度器的间隔范围](https://learn.microsoft.com/en-us/windows/win32/taskschd/taskschedulerschema-interval-repetitiontype-element)
+
 ## 接手一个变更
 
 **改系统设置或备份。** 从 [settingsRoutes.ts](../src/features/settings/settingsRoutes.ts) 找到对应子页，同时维护中英文词条。设备语言保存在本机 WebView 的 `savemywallet.locale` 偏好中。界面格式化使用 `formatMoney` 和 `formatMonth`，货币始终为人民币，平台名和款项名称按原文显示。

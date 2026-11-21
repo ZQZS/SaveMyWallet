@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createReminderService } from '../src/features/reminders/reminderService.ts'
+import { createIntervalRecurrence, createRandomWindowRecurrence, nextReminderOccurrence } from '../src/features/reminders/recurrence.ts'
 
 function setup() {
   const records = new Map()
@@ -37,7 +38,10 @@ function setup() {
         calls.push(['schedule', ...args])
         if (state.denied) throw new Error('REMINDER_PERMISSION')
       },
-      async notify(...args) { calls.push(['notify', ...args]) },
+      async notify(...args) {
+        calls.push(['notify', ...args])
+        if (state.denied) throw new Error('REMINDER_PERMISSION')
+      },
       async cancel(...args) {
         calls.push(['cancel', ...args])
         if (state.cancelFails) throw new Error('REMINDER_DELIVERY')
@@ -98,6 +102,37 @@ test('an armed system notification is never sent again by the frontend after exp
   await reopened.refresh()
   assert.equal(reopened.tasks.value.find(item => item.id === future.id).status, 'completed')
   assert.deepEqual(calls.map(call => call[0]), ['wording', 'schedule', 'wording', 'notify'])
+})
+
+test('testing either delivery channel leaves task history and registered schedules untouched', async () => {
+  const { service, state, records, calls, restart } = setup()
+  const regular = await service.create({ channel: 'notification', text: '还款', at: state.time + 60_000 })
+  const before = structuredClone(records.get(regular.id))
+  calls.length = 0
+  await service.test({ channel: 'notification', text: '吃饭', pet: { id: 'fox' } })
+  assert.deepEqual(calls, [['wording', '吃饭', 'fox', undefined], ['notify', 0, '猫', '吃饭']])
+  await service.test({ channel: 'popup', text: '睡觉' })
+  assert.equal(service.activePopup.value.message, '睡觉')
+  assert.equal(restart().activePopup.value, null)
+  await service.dismissPopup()
+  assert.deepEqual([...records.values()], [before])
+  assert.equal(service.tasks.value.length, 1)
+  await assert.rejects(service.test({ channel: 'popup', text: 'x'.repeat(301) }), /REMINDER_INVALID_TEXT/)
+  state.denied = true
+  await assert.rejects(service.test({ channel: 'notification', text: '测试' }), /REMINDER_PERMISSION/)
+  assert.deepEqual([...records.values()], [before])
+})
+
+test('testing a popup preserves a regular reminder that has already been shown', async () => {
+  const { service } = setup()
+  const regular = await service.create({ channel: 'popup', text: '还款' })
+  await service.test({ channel: 'popup', text: '测试' })
+  assert.equal(service.activePopup.value.id, regular.id)
+  await service.dismissPopup()
+  assert.equal(service.activePopup.value.message, '测试')
+  await service.dismissPopup()
+  assert.equal(service.activePopup.value, null)
+  assert.deepEqual(service.tasks.value.map(t => t.id), [regular.id])
 })
 
 test('failed registration is visible, and cancellation can be retried against the original OS ID', async () => {
@@ -168,6 +203,7 @@ test('deleting an elapsed notification clears its OS schedule first and remains 
   await assert.rejects(service.create({ channel: 'notification', text: '试试', at: state.time + 2000 }))
   state.cancelFails = true
   await service.remove(service.tasks.value[0].id)
+  state.denied = false
   const immediate = await service.create({ channel: 'notification', text: '起身' })
   await service.remove(immediate.id)
   assert.equal(service.tasks.value.length, 0)
@@ -319,5 +355,72 @@ test('an interrupted OS replacement that cannot be verified stays cancellable an
   await opened.cancel(task.id)
   assert.equal(opened.tasks.value[0].status, 'cancelled')
   assert.equal(opened.tasks.value[0].pendingEdit, undefined)
+  assert.deepEqual(calls.at(-1), ['cancel', task.id])
+})
+
+test('an interval popup repeats within one day and coalesces missed periods without moving the anchor', async () => {
+  const { service, state, restart } = setup()
+  const interval = createIntervalRecurrence(10, state.time)
+  const task = await service.create({ channel: 'popup', text: '休息', recurrence: interval })
+  assert.equal(task.at, interval.anchorAt)
+  state.time = task.at
+  await service.refresh()
+  assert.equal(service.activePopup.value.at, task.at)
+  assert.equal(service.tasks.value[0].at, task.at + 600_000)
+  await service.dismissPopup()
+  state.time += 23 * 60_000
+  const opened = restart()
+  await opened.refresh()
+  assert.equal(opened.activePopup.value.at, task.at + 1_200_000)
+  await opened.dismissPopup()
+  assert.equal(opened.activePopup.value, null)
+  assert.equal(opened.tasks.value[0].at, task.at + 1_800_000)
+  await opened.edit(task.id, { channel: 'popup', text: '休息一下', recurrence: interval })
+  assert.deepEqual(opened.tasks.value[0].recurrence, interval)
+  assert.equal(opened.tasks.value[0].at, task.at + 1_800_000)
+})
+
+test('random meal popups expire when outside their window and catch up once while still inside it', async () => {
+  const { service, state, restart } = setup()
+  const lunch = createRandomWindowRecurrence('11:30', '13:00', 42)
+  state.time = local(2026, 11, 22)
+  const task = await service.create({ channel: 'popup', text: '吃饭', recurrence: lunch })
+  state.visible = false
+  state.time = local(2026, 11, 22, 21)
+  await service.refresh()
+  state.visible = true
+  const opened = restart()
+  await opened.refresh()
+  assert.equal(opened.activePopup.value, null)
+  const tomorrow = opened.tasks.value[0].at
+  assert.equal(tomorrow, nextReminderOccurrence(lunch, state.time))
+  state.time = local(2026, 11, 23, 13)
+  await opened.refresh()
+  assert.equal(opened.activePopup.value.id, task.id)
+  assert.equal(opened.activePopup.value.at, tomorrow)
+  state.time += 60_000
+  await opened.refresh()
+  assert.equal(opened.activePopup.value, null)
+  assert.deepEqual(opened.tasks.value[0].recurrence, lunch)
+})
+
+test('adjacent overnight windows that land on the same date are each delivered once', async () => {
+  const { service, state, calls } = setup()
+  const night = createRandomWindowRecurrence('23:00', '01:00', 42)
+  state.time = local(2026, 11, 24, 19)
+  const task = await service.create({ channel: 'popup', text: '睡觉', recurrence: night })
+  assert.equal(task.at, new Date(2026, 10, 25, 0, 15).getTime())
+  state.time = task.at
+  await service.refresh()
+  assert.equal(service.tasks.value[0].lastLocalDay, '2026-11-24')
+  await service.dismissPopup()
+  const next = new Date(2026, 10, 25, 23, 28).getTime()
+  assert.equal(service.tasks.value[0].at, next)
+  await service.edit(task.id, { channel: 'notification', text: '睡觉', recurrence: night })
+  assert.deepEqual(calls.at(-1), ['schedule', task.id, next, '猫', '睡觉', true, night])
+  state.time = next
+  await service.refresh()
+  assert.equal(service.tasks.value[0].lastLocalDay, '2026-11-25')
+  await service.cancel(task.id)
   assert.deepEqual(calls.at(-1), ['cancel', task.id])
 })

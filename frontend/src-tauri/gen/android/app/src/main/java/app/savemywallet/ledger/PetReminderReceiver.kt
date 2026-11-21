@@ -75,7 +75,8 @@ internal object PetReminders {
             .setContentIntent(openApp)
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
-            .setOnlyAlertOnce(!recurring)
+            // Test alerts reuse ID 0 so they replace the preview but alert on every tap.
+            .setOnlyAlertOnce(id != 0 && !recurring)
             .setAutoCancel(true)
             .build()
         context.getSystemService(NotificationManager::class.java).notify(CHANNEL, id, notice)
@@ -100,11 +101,14 @@ internal object PetReminders {
         manager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, trigger)
     }
 
-    private fun readRule(json: JSONObject) = PetReminderRecurrence(
-        json.getString("frequency"), json.getString("time"),
-        if (json.has("weekday")) json.getInt("weekday") else null,
-        if (json.has("dayOfMonth")) json.getInt("dayOfMonth") else null,
-    )
+    private fun readRule(json: JSONObject): PetReminderRecurrence = when (val frequency = json.getString("frequency")) {
+        "interval" -> PetReminderRecurrence.Interval(json.getInt("minutes"), json.getLong("anchorAt"))
+        "randomWindow" -> PetReminderRecurrence.RandomWindow(
+            json.getString("startTime"), json.getString("endTime"), json.getInt("seed"))
+        else -> PetReminderRecurrence.CalendarRule(frequency, json.getString("time"),
+            if (json.has("weekday")) json.getInt("weekday") else null,
+            if (json.has("dayOfMonth")) json.getInt("dayOfMonth") else null)
+    }
 
     fun schedule(context: Context, id: Int, at: Long, title: String, body: String, recurrence: JSONObject?) {
         if (!allowed(context)) throw SecurityException("REMINDER_PERMISSION")
@@ -112,9 +116,19 @@ internal object PetReminders {
         if (recurrence != null) {
             val zone = TimeZone.getDefault()
             val rule = readRule(recurrence)
+            require(rule.nextAfter(at - 1, zone) == at)
             val now = System.currentTimeMillis()
-            val after = if (rule.nextAfter(now, zone) == at) now else at - 1
-            value.put("recurrence", recurrence).put("zone", zone.id).put("after", after)
+            // The activity may be editing the wording after the receiver already delivered a
+            // notification. A retry with the same rule must preserve its consumed slot.
+            val old = store(context).getString(id.toString(), null)?.let(::JSONObject)
+            val sameRule = old?.optJSONObject("recurrence")?.let(::readRule) == rule
+            val lastDay = if (sameRule) old!!.optInt("lastLocalDay") else 0
+            val first = rule.nextAfter(at - 1, zone, lastDay)
+            val effective = if (sameRule && rule is PetReminderRecurrence.Interval)
+                maxOf(first, old!!.getLong("at")) else first
+            val after = if (rule.nextAfter(now, zone, lastDay) == effective) now else effective - 1
+            value.put("at", effective).put("recurrence", recurrence).put("zone", zone.id)
+                .put("after", after).put("lastLocalDay", lastDay)
         }
         saveAndArm(context, id, value)
     }
@@ -160,7 +174,7 @@ internal object PetReminders {
         val zone = TimeZone.getDefault()
         val rule = reminder.optJSONObject("recurrence")?.let(::readRule)
         val lastDay = reminder.optInt("lastLocalDay")
-        val zoneChanged = rule != null && reminder.optString("zone") != zone.id
+        val zoneChanged = rule is PetReminderRecurrence.Civil && reminder.optString("zone") != zone.id
         if (zoneChanged) {
             at = rule.nextAfter(reminder.getLong("after"), zone, lastDay)
             reminder.put("at", at).put("zone", zone.id)
@@ -173,9 +187,10 @@ internal object PetReminders {
         if (rule != null) {
             // Advance the series before posting. Boot, permission callbacks, and already
             // queued alarm broadcasts can all reconcile the same outstanding occurrence.
-            val deliveredDay = rule.lastDueDay(now, zone)
-            val next = rule.nextAfter(now, zone, deliveredDay)
-            saveAndArm(context, id, reminder.put("at", next).put("lastLocalDay", deliveredDay).put("after", now))
+            val advance = rule.advanceDue(now, zone)
+            saveAndArm(context, id, reminder.put("at", advance.nextAt)
+                .put("lastLocalDay", advance.lastLocalDay).put("after", now))
+            if (!advance.notify) return
         }
         try {
             post(context, id, reminder.getString("title"), reminder.getString("body"), rule != null)

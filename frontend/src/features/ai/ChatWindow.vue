@@ -17,7 +17,9 @@ const props = defineProps<{ pet?: PetCharacter; month: string; totals: MonthlySu
 const emit = defineEmits<{ close: [] }>()
 const session = useLedgerSession()
 const reminders = useReminders()
-const { review, confirm, decline, forTurn } = useLedgerActionReview(session, input => reminders.create({ ...input, pet: props.pet }))
+const { review, confirm, decline, forTurn } = useLedgerActionReview(session,
+  input => reminders.create({ ...input, pet: props.pet }),
+  input => reminders.test({ ...input, pet: props.pet }))
 const { messages, draft, pending, error, send, stop, conversations, activeConversationId, newChat, selectChat } =
   props.pet ? usePetChat(props.pet, props.month) : useGeneralChat(props.month)
 const speaker = computed(() => props.pet?.name ?? t('chat.assistant'))
