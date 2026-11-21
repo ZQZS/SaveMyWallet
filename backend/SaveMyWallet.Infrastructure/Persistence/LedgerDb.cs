@@ -1,8 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 
-namespace SaveMyWallet.Api.Infrastructure.Persistence;
+namespace SaveMyWallet.Infrastructure.Persistence;
 
-public sealed class LedgerDb(DbContextOptions<LedgerDb> options) : DbContext(options)
+internal sealed class LedgerDb(DbContextOptions<LedgerDb> options) : DbContext(options)
 {
     public DbSet<LedgerHead> Ledgers => Set<LedgerHead>();
     public DbSet<StoredRecord> Records => Set<StoredRecord>();

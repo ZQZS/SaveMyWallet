@@ -1,11 +1,11 @@
 using System.Text;
-using SaveMyWallet.Api.Dto;
+using SaveMyWallet.Dto;
 
-namespace SaveMyWallet.Api.Core;
+namespace SaveMyWallet.Core;
 
-internal static class SyncRules
+public static class SyncRules
 {
-    internal static void ValidateOperation(SyncOperation operation)
+    public static void ValidateOperation(SyncOperation operation)
     {
         CheckOperationId(operation.OperationId);
         if (operation.Changes is null || operation.Changes.Count == 0)
@@ -13,13 +13,13 @@ internal static class SyncRules
         ValidateEnvelope(operation.Changes);
     }
 
-    internal static void CheckOperationId(string operationId)
+    public static void CheckOperationId(string operationId)
     {
         if (!LedgerRules.IsSafeKey(operationId, 128))
             throw new LedgerException(400, "invalid_operation_id", "Invalid operation ID.");
     }
 
-    internal static void ValidateEnvelope(IReadOnlyList<SyncChange> changes)
+    public static void ValidateEnvelope(IReadOnlyList<SyncChange> changes)
     {
         var keys = new HashSet<(string, string)>();
         foreach (var change in changes)

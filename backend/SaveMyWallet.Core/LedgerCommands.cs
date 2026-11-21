@@ -1,12 +1,12 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
-using SaveMyWallet.Api.Dto;
+using SaveMyWallet.Dto;
 
-namespace SaveMyWallet.Api.Core;
+namespace SaveMyWallet.Core;
 
-internal static class LedgerCommands
+public static class LedgerCommands
 {
-    internal static RestMutation CreatePlatform(IReadOnlyList<SyncRecord> rows, NewPlatform input)
+    public static RestMutation CreatePlatform(IReadOnlyList<SyncRecord> rows, NewPlatform input)
     {
         var name = LedgerRules.CleanText(input.Name, 40);
         var id = LedgerRules.PlatformId(name);
@@ -16,7 +16,7 @@ internal static class LedgerCommands
         return new RestMutation([new SyncChange("platform", id, null, null, value)], new JsonObject { ["id"] = id });
     }
 
-    internal static RestMutation CreateBills(NewBill?[] inputs)
+    public static RestMutation CreateBills(NewBill?[] inputs)
     {
         LedgerRules.Require(inputs.Length > 0, "invalid_bills", "Supply at least one bill.");
         var changes = new List<SyncChange>();
@@ -28,7 +28,7 @@ internal static class LedgerCommands
         return new(changes, null);
     }
 
-    internal static RestMutation CreateBill(NewBill input)
+    public static RestMutation CreateBill(NewBill input)
     {
         LedgerRules.ValidateId(input.PlatformId);
         var title = LedgerRules.CleanText(input.Title, 120);
@@ -67,7 +67,7 @@ internal static class LedgerCommands
         return new(changes, null);
     }
 
-    internal static RestMutation Confirm(IReadOnlyList<SyncRecord> rows, string id, Confirmation input)
+    public static RestMutation Confirm(IReadOnlyList<SyncRecord> rows, string id, Confirmation input)
     {
         var title = LedgerRules.CleanText(input.Title, 120);
         LedgerRules.Month(input.Month);
@@ -97,13 +97,13 @@ internal static class LedgerCommands
         return new([new SyncChange("entry", id, row.Version, current, updated)], null);
     }
 
-    internal static RestMutation SetVoided(IReadOnlyList<SyncRecord> rows, string id, bool voided)
+    public static RestMutation SetVoided(IReadOnlyList<SyncRecord> rows, string id, bool voided)
     {
         var change = VoidChange(FindEntry(rows, id), voided);
         return new(change is null ? [] : [change], null);
     }
 
-    internal static RestMutation SetInstallmentVoided(IReadOnlyList<SyncRecord> rows, string id, bool voided)
+    public static RestMutation SetInstallmentVoided(IReadOnlyList<SyncRecord> rows, string id, bool voided)
     {
         var changes = new List<SyncChange>();
         var changedIds = new JsonArray();
@@ -130,7 +130,7 @@ internal static class LedgerCommands
         rows.FirstOrDefault(r => r.Kind == "entry" && r.Id == id && r.Value is JsonObject)
         ?? throw new LedgerException(404, "unknown_entry", "Bill not found.");
 
-    internal static RestMutation Pay(IReadOnlyList<SyncRecord> rows, Payment input)
+    public static RestMutation Pay(IReadOnlyList<SyncRecord> rows, Payment input)
     {
         LedgerRules.Require(input.Ids is not null, "invalid_ids", "Supply the entry IDs to update.");
         var entries = rows.Where(r => r.Kind == "entry" && r.Value is JsonObject value && !value.ContainsKey("voided"))
@@ -151,7 +151,7 @@ internal static class LedgerCommands
         return new(changes, new JsonObject { ["changedIds"] = changedIds });
     }
 
-    internal static RestMutation SaveBudget(IReadOnlyList<SyncRecord> rows, Budget input)
+    public static RestMutation SaveBudget(IReadOnlyList<SyncRecord> rows, Budget input)
     {
         LedgerRules.Month(input.Month);
         var amounts = new (string Kind, string Id, long? Amount)[]

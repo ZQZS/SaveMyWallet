@@ -1,0 +1,8 @@
+<Solution>
+  <Project Path="SaveMyWallet.Api/SaveMyWallet.Api.csproj" />
+  <Project Path="SaveMyWallet.Core/SaveMyWallet.Core.csproj" />
+  <Project Path="SaveMyWallet.Dto/SaveMyWallet.Dto.csproj" />
+  <Project Path="SaveMyWallet.Infrastructure/SaveMyWallet.Infrastructure.csproj" />
+  <Project Path="SaveMyWallet.Interfaces/SaveMyWallet.Interfaces.csproj" />
+  <Project Path="SaveMyWallet.Services/SaveMyWallet.Services.csproj" />
+</Solution>

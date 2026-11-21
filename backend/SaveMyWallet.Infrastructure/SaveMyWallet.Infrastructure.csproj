@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../SaveMyWallet.Core/SaveMyWallet.Core.csproj" />
+    <ProjectReference Include="../SaveMyWallet.Dto/SaveMyWallet.Dto.csproj" />
+    <ProjectReference Include="../SaveMyWallet.Interfaces/SaveMyWallet.Interfaces.csproj" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
+  </ItemGroup>
+</Project>

@@ -1,20 +1,20 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json.Nodes;
-using SaveMyWallet.Api.Dto;
+using SaveMyWallet.Dto;
 
-namespace SaveMyWallet.Api.Core;
+namespace SaveMyWallet.Core;
 
 /// <summary>Rules shared by the HTTP ledger commands and the offline synchronization path.</summary>
 public static class LedgerRules
 {
     internal const long MaxCents = 99_999_999_900;
-    internal const string DefaultSalary = "defaultSalaryCents";
-    internal const string WarningFloor = "warningFloorCents";
+    public const string DefaultSalary = "defaultSalaryCents";
+    public const string WarningFloor = "warningFloorCents";
     private static readonly string[] EntryFields =
         ["id", "platformId", "title", "month", "amountCents", "status", "kind", "installmentIndex", "installmentCount"];
 
-    internal static bool IsSafeKey(string? text, int max) =>
+    public static bool IsSafeKey(string? text, int max) =>
         text is { Length: > 0 } && text.Length <= max &&
         text.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.');
 

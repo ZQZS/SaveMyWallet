@@ -1,4 +1,4 @@
-using SaveMyWallet.Api.Core;
+using SaveMyWallet.Core;
 
 namespace SaveMyWallet.Api.Middleware;
 

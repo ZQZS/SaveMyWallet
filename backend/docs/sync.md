@@ -125,8 +125,9 @@ SQLite 结构 v4 增加作废标记，v5 增加可选的分期标识。升级保
 
 | 改动 | 查看实现 |
 | --- | --- |
-| 部署配置、认证、建表与数据库版本 | [服务入口](../SaveMyWallet.Api/Program.cs) · [账本认证](../SaveMyWallet.Api/Middleware/LedgerAccess.cs) · [数据库初始化](../SaveMyWallet.Api/Infrastructure/Persistence/Schema.cs) |
-| HTTP 接口与请求契约 | [业务路由](../SaveMyWallet.Api/Endpoints/LedgerEndpoints.cs) · [业务请求 DTO](../SaveMyWallet.Api/Dto/LedgerRequests.cs) · [同步路由](../SaveMyWallet.Api/Endpoints/SyncEndpoints.cs) · [同步 DTO](../SaveMyWallet.Api/Dto/SyncContract.cs) |
-| 账务规则、同步读写与事务 | [账务命令](../SaveMyWallet.Api/Core/LedgerCommands.cs) · [账务校验](../SaveMyWallet.Api/Core/LedgerRules.cs) · [存储接口](../SaveMyWallet.Api/Interfaces/ISyncStore.cs) · [PostgreSQL 实现](../SaveMyWallet.Api/Infrastructure/Persistence/SyncStore.cs) |
+| 部署配置、认证、建表与数据库版本 | [服务入口](../SaveMyWallet.Api/Program.cs) · [账本认证](../SaveMyWallet.Api/Middleware/LedgerAccess.cs) · [数据库初始化](../SaveMyWallet.Infrastructure/Persistence/Schema.cs) |
+| HTTP 路由与请求契约 | [账本路由](../SaveMyWallet.Api/Endpoints/LedgerEndpoints.cs) · [账务请求 DTO](../SaveMyWallet.Dto/LedgerRequests.cs) · [同步路由](../SaveMyWallet.Api/Endpoints/SyncEndpoints.cs) · [同步 DTO](../SaveMyWallet.Dto/SyncContract.cs) |
+| 账务与同步用例 | [账本服务](../SaveMyWallet.Services/LedgerService.cs) · [同步服务](../SaveMyWallet.Services/SyncService.cs) |
+| 账务规则、同步读写与事务 | [账务命令](../SaveMyWallet.Core/LedgerCommands.cs) · [账务校验](../SaveMyWallet.Core/LedgerRules.cs) · [存储接口](../SaveMyWallet.Interfaces/ISyncStore.cs) · [PostgreSQL 实现](../SaveMyWallet.Infrastructure/Persistence/SyncStore.cs) |
 | 本机待同步队列、绑定、冲突和网络重试 | [SQLite 同步表](../../frontend/src-tauri/src/schema_v2.sql) · [v3 迁移](../../frontend/src-tauri/src/schema_v3.sql) · [v4 明细作废标记](../../frontend/src-tauri/src/schema_v4.sql) · [v5 分期标识](../../frontend/src-tauri/src/schema_v5.sql) · [本机同步状态](../../frontend/src-tauri/src/ledger/sync.rs) · [原生网络请求](../../frontend/src-tauri/src/sync_client.rs) |
 | 复核手动裁决及同步结果 | [设置页](../../frontend/src/features/settings/ConnectionsSettingsPage.vue) · [冲突选项](../../frontend/src/features/settings/SyncConflictCard.vue) · [HTTP 集成测试](../tests/sync.integration.mjs) |

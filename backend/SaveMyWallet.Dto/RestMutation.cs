@@ -1,6 +1,5 @@
 using System.Text.Json.Nodes;
-using SaveMyWallet.Api.Dto;
 
-namespace SaveMyWallet.Api.Core;
+namespace SaveMyWallet.Dto;
 
 public record RestMutation(IReadOnlyList<SyncChange> Changes, JsonNode? Response);

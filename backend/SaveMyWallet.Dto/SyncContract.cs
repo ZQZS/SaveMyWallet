@@ -1,7 +1,7 @@
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
-namespace SaveMyWallet.Api.Dto;
+namespace SaveMyWallet.Dto;
 
 public record SyncRecord(string Kind, string Id, JsonNode? Value, string? Version);
 public record SyncChange(

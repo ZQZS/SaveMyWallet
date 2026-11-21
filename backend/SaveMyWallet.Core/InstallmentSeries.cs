@@ -1,7 +1,7 @@
 using System.Text.Json.Nodes;
-using SaveMyWallet.Api.Dto;
+using SaveMyWallet.Dto;
 
-namespace SaveMyWallet.Api.Core;
+namespace SaveMyWallet.Core;
 
 internal static class InstallmentSeries
 {

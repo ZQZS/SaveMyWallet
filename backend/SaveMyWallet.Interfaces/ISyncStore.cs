@@ -1,8 +1,7 @@
 using System.Text.Json.Nodes;
-using SaveMyWallet.Api.Core;
-using SaveMyWallet.Api.Dto;
+using SaveMyWallet.Dto;
 
-namespace SaveMyWallet.Api.Interfaces;
+namespace SaveMyWallet.Interfaces;
 
 public interface ISyncStore
 {

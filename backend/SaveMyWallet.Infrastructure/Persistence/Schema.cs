@@ -1,6 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 
-namespace SaveMyWallet.Api.Infrastructure.Persistence;
+namespace SaveMyWallet.Infrastructure.Persistence;
 
 internal static class Schema
 {

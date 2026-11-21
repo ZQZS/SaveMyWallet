@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "savemywallet.core": {
+        "type": "Project",
+        "dependencies": {
+          "SaveMyWallet.Dto": "[0.3.0, )"
+        }
+      },
+      "savemywallet.dto": {
+        "type": "Project"
+      },
+      "savemywallet.interfaces": {
+        "type": "Project",
+        "dependencies": {
+          "SaveMyWallet.Dto": "[0.3.0, )"
+        }
+      }
+    }
+  }
+}

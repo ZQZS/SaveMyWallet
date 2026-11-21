@@ -1,6 +1,6 @@
-using SaveMyWallet.Api.Dto;
+using SaveMyWallet.Dto;
 
-namespace SaveMyWallet.Api.Core;
+namespace SaveMyWallet.Core;
 
 public class LedgerException(int status, string code, string message) : Exception(message)
 {
@@ -8,7 +8,7 @@ public class LedgerException(int status, string code, string message) : Exceptio
     public string Code { get; } = code;
 }
 
-internal sealed class SyncConflict(string code, long cursor, IReadOnlyList<SyncRecord> records)
+public sealed class SyncConflict(string code, long cursor, IReadOnlyList<SyncRecord> records)
     : LedgerException(409, code, "The submitted changes no longer match the ledger.")
 {
     public long Cursor { get; } = cursor;

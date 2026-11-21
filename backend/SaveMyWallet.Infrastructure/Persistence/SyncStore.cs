@@ -2,13 +2,13 @@ using System.Data;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
-using SaveMyWallet.Api.Core;
-using SaveMyWallet.Api.Dto;
-using SaveMyWallet.Api.Interfaces;
+using SaveMyWallet.Core;
+using SaveMyWallet.Dto;
+using SaveMyWallet.Interfaces;
 
-namespace SaveMyWallet.Api.Infrastructure.Persistence;
+namespace SaveMyWallet.Infrastructure.Persistence;
 
-public sealed class SyncStore(LedgerDb db) : ISyncStore
+internal sealed class SyncStore(LedgerDb db) : ISyncStore
 {
     private const int PageSize = 64;
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
@@ -26,7 +26,6 @@ public sealed class SyncStore(LedgerDb db) : ISyncStore
 
     public async Task<PullResult> PullAsync(string ledgerId, long cursor, CancellationToken ct)
     {
-        if (cursor < 0) throw new LedgerException(400, "invalid_cursor", "Cursor must be nonnegative.");
         await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead, ct);
         var latest = await Cursor(ledgerId, ct);
         if (cursor > latest) throw new LedgerException(409, "invalid_cursor", "Cursor is ahead of this ledger.");
@@ -43,20 +42,16 @@ public sealed class SyncStore(LedgerDb db) : ISyncStore
         return new PullResult(ledgerId, cursor, changes.Values.ToArray(), cursor < latest);
     }
 
-    public async Task<JsonNode?> PushAsync(string ledgerId, SyncOperation operation, CancellationToken ct)
+    public Task<JsonNode?> PushAsync(string ledgerId, SyncOperation operation, CancellationToken ct)
     {
-        SyncRules.ValidateOperation(operation);
         var request = JsonSerializer.SerializeToNode(operation, Json)!;
-        return await Write(ledgerId, operation.OperationId, request, operation.Seed,
+        return Write(ledgerId, operation.OperationId, request, operation.Seed,
             _ => new RestMutation(operation.Changes, null), operation.Changes, ct);
     }
 
     public Task<JsonNode?> ExecuteRestAsync(string ledgerId, string operationId, string fingerprint,
-        Func<IReadOnlyList<SyncRecord>, RestMutation> build, CancellationToken ct)
-    {
-        SyncRules.CheckOperationId(operationId);
-        return Write(ledgerId, operationId, JsonValue.Create(fingerprint)!, false, build, null, ct);
-    }
+        Func<IReadOnlyList<SyncRecord>, RestMutation> build, CancellationToken ct) =>
+        Write(ledgerId, operationId, JsonValue.Create(fingerprint)!, false, build, null, ct);
 
     private async Task<JsonNode?> Write(string ledgerId, string operationId, JsonNode request, bool seed,
         Func<IReadOnlyList<SyncRecord>, RestMutation> build, IReadOnlyList<SyncChange>? syncChanges, CancellationToken ct)

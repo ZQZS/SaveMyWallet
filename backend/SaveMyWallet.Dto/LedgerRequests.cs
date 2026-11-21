@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace SaveMyWallet.Api.Dto;
+namespace SaveMyWallet.Dto;
 
 public sealed record NewPlatform([property: JsonRequired] string Name);
 

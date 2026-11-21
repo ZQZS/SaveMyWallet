@@ -1,7 +1,7 @@
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
-using SaveMyWallet.Api.Core;
+using SaveMyWallet.Core;
 
 namespace SaveMyWallet.Api.Middleware;
 

@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../SaveMyWallet.Dto/SaveMyWallet.Dto.csproj" />
+  </ItemGroup>
+</Project>

@@ -2,6 +2,19 @@
 
 本服务使用 **ASP.NET Core 10、EF Core 10 和 PostgreSQL**。Windows 与安卓各自从本机 SQLite 读写。两台设备绑定同一服务上的同一账本后，可在联网时交换明细、还款状态和预算。断网录入的分期沿用本机分配的每一期 ID。两端把同一笔预计补款确认为不同金额或月份时，用户可以在设置中选择采用哪个版本。[同步协议与冲突处理](docs/sync.md)
 
+## 后端项目
+
+用 Visual Studio 打开[后端解决方案](SaveMyWallet.slnx)，或在仓库根目录运行 `dotnet build ./backend/SaveMyWallet.slnx` 构建所有项目。
+
+| 项目 | 职责 |
+| --- | --- |
+| `SaveMyWallet.Api` | 启动 HTTP 服务、注册依赖、认证请求，将路由分派给业务服务。 |
+| `SaveMyWallet.Services` | 实现账本和同步用例，调用核心规则，通过存储接口读取快照或提交变更。 |
+| `SaveMyWallet.Core` | 生成账务命令的变更记录，校验金额、分期、状态转换和同步操作。 |
+| `SaveMyWallet.Dto` | 定义账单请求、账本快照、同步记录和操作结果等共享数据结构。 |
+| `SaveMyWallet.Interfaces` | 定义账本服务、同步服务和同步存储的接口。 |
+| `SaveMyWallet.Infrastructure` | 使用 EF Core 和 PostgreSQL 实现存储接口，负责建表、事务、游标和幂等回执。 |
+
 ## 在 Windows 上启动开发服务
 
 需要 .NET 10 SDK、一套可以连接的 PostgreSQL 和一个专用数据库。API 首次启动会建立表结构，数据库角色需要建表权限。在有 PostgreSQL 管理权限的终端运行以下命令，可建立开发用角色和数据库。
