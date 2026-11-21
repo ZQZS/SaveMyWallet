@@ -4,6 +4,7 @@ mod deepseek;
 pub(crate) mod images;
 pub(crate) mod pet_chat;
 mod requests;
+pub(crate) mod spending;
 
 use crate::ledger::{month_index, MAX_CENTS};
 use deepseek::DeepSeek;

@@ -7,6 +7,7 @@ import { isMonth, MAX_MONTH, MIN_MONTH, shiftMonth } from '../../domain/ledger'
 import { formatMoney, formatMonth, locale, t } from '../../i18n'
 import { buildStatistics, type StatisticsRange } from './statistics'
 import MonthlyTrendChart from './MonthlyTrendChart.vue'
+import SpendingAnalysis from './SpendingAnalysis.vue'
 
 const { data, month: ledgerMonth, busy, selectMonth, calculateMonth } = useLedgerSession()
 const route = useRoute()
@@ -110,6 +111,7 @@ async function openLedger() {
       </ul>
       <p v-else class="empty">{{ t('stats.noSpending') }}</p>
     </section>
+    <SpendingAnalysis class="panel" :points="points" :selected-month="selected.month" />
   </div>
 </template>
 

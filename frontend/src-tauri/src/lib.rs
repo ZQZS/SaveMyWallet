@@ -139,6 +139,7 @@ pub fn run() {
             ai::credentials::ai_remove_key,
             ai::ai_test_key,
             ai::ai_explain,
+            ai::spending::ai_classify_spending,
             ai::pet_chat::ai_pet_chat,
             ai::ai_parse_scenario,
             ai::assistant_inputs::ai_parse_notice,
