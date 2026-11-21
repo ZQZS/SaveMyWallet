@@ -1,4 +1,6 @@
 import { locale, t } from '../../i18n/index.ts'
+import { nextReminderOccurrence, parseReminderRecurrence } from './recurrence.ts'
+import { formatReminderRecurrence } from './recurrenceFormat.ts'
 import type { ReminderInput, ReminderTask } from './reminderService.ts'
 
 const reminderActions = {
@@ -27,12 +29,16 @@ export function parseLocalReminderTime(value: unknown): number {
   return date.getTime()
 }
 
-function reminderTime(args: Record<string, unknown>, requestedAt: number) {
-  if (('atLocal' in args) === ('delaySeconds' in args)) throw new Error('REMINDER_INVALID_TIME')
-  if ('atLocal' in args) return parseLocalReminderTime(args.atLocal)
+function reminderSchedule(args: Record<string, unknown>, requestedAt: number) {
+  if (['atLocal', 'delaySeconds', 'recurrence'].filter(key => key in args).length !== 1) throw new Error('REMINDER_INVALID_TIME')
+  if ('recurrence' in args) {
+    const recurrence = parseReminderRecurrence(args.recurrence)
+    return { at: nextReminderOccurrence(recurrence, Date.now()), recurrence }
+  }
+  if ('atLocal' in args) return { at: parseLocalReminderTime(args.atLocal) }
   const delay = args.delaySeconds
   if (typeof delay !== 'number' || !Number.isSafeInteger(delay) || delay < 1) throw new Error('REMINDER_INVALID_TIME')
-  return requestedAt + delay * 1000
+  return { at: requestedAt + delay * 1000 }
 }
 
 function checkTime(at: number | undefined) {
@@ -43,23 +49,29 @@ function checkTime(at: number | undefined) {
 
 export function prepareReminderAction(name: ReminderActionName, args: Record<string, unknown>, requestedAt: number) {
   const { channel, scheduled } = reminderActions[name]
-  const fields = scheduled ? ['text', 'delaySeconds', 'atLocal'] : ['text']
+  const fields = scheduled ? ['text', 'delaySeconds', 'atLocal', 'recurrence'] : ['text']
   if (Object.keys(args).some(key => !fields.includes(key))) throw new Error('AI_INVALID_INPUT')
   if ('text' in args && typeof args.text !== 'string') throw new Error('REMINDER_INVALID_TEXT')
   const text = typeof args.text === 'string' ? args.text.trim() : ''
   if (Array.from(text).length > 300) throw new Error('REMINDER_INVALID_TEXT')
-  const at = scheduled ? reminderTime(args, requestedAt) : undefined
+  const schedule = scheduled ? reminderSchedule(args, requestedAt) : undefined
+  const at = schedule?.at
   checkTime(at)
   const time = at === undefined ? t('reminders.now') : new Intl.DateTimeFormat(locale.value, {
     year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit', timeZoneName: 'short',
   }).format(at)
+  const rule = schedule?.recurrence && formatReminderRecurrence(schedule.recurrence)
+  const lines = rule ? [rule, t('chat.reminder.next', { time })] : [time]
+  if (schedule?.recurrence?.frequency === 'monthly' && schedule.recurrence.dayOfMonth > 28) lines.push(t('reminders.shortMonths'))
+  lines.push(text || t('chat.reminder.petChooses'))
   return {
-    name, lines: [time, text || t('chat.reminder.petChooses')],
+    name, lines,
     async apply(create: CreateReminder) {
       checkTime(at)
-      const task = await create({ channel, text, ...(at !== undefined && { at }) })
+      const task = await create({ channel, text, ...schedule })
       if (task.status === 'completed') return t('chat.reminder.' + (channel === 'popup' ? 'shown' : 'sent'))
       if (task.status !== 'scheduled') throw new Error('REMINDER_STATE')
+      if (rule) return t('chat.reminder.recurring', { channel: t('reminders.' + channel), rule, time })
       return at === undefined ? t('chat.reminder.queued')
         : t('chat.reminder.scheduled', { channel: t('reminders.' + channel), time })
     },

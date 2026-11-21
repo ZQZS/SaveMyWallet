@@ -30,9 +30,10 @@ export function startReminders() {
     }
     const due = reminders.tasks.value.filter(task => task.status === 'scheduled'
       && (task.channel === 'notification' || (visible() && !reminders.activePopup.value)))
-    if (!due.length) return
+    const needsRecovery = reminders.tasks.value.some(task => ['editing', 'preparing', 'cancelling'].includes(task.status))
+    if (!due.length && !needsRecovery) return
     // Re-check periodically for changes to the device clock, including after resume.
-    let delay = 60_000
+    let delay = needsRecovery ? 30_000 : 60_000
     for (const task of due) delay = Math.min(delay, Math.max(0, task.at - Date.now()))
     timer = window.setTimeout(refresh, delay)
   }

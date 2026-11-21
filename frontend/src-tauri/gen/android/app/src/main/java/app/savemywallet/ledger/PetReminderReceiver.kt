@@ -13,6 +13,7 @@ import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import org.json.JSONObject
+import java.util.TimeZone
 import java.util.concurrent.Executors
 
 class PetReminderReceiver : BroadcastReceiver() {
@@ -21,7 +22,8 @@ class PetReminderReceiver : BroadcastReceiver() {
         PetReminders.worker.execute {
             try {
                 when (intent.action) {
-                    Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED -> PetReminders.restore(context)
+                    Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED,
+                    Intent.ACTION_TIME_CHANGED, Intent.ACTION_TIMEZONE_CHANGED -> PetReminders.restore(context)
                     PetReminders.ALARM -> if (intent.hasExtra("id")) {
                         PetReminders.deliver(context, intent.getIntExtra("id", 0))
                     }
@@ -61,7 +63,7 @@ internal object PetReminders {
         return true
     }
 
-    fun post(context: Context, id: Int, title: String, body: String) {
+    fun post(context: Context, id: Int, title: String, body: String, recurring: Boolean = false) {
         if (!allowed(context)) throw SecurityException("REMINDER_PERMISSION")
         val openApp = PendingIntent.getActivity(context, 0, Intent(context, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE)
@@ -73,7 +75,7 @@ internal object PetReminders {
             .setContentIntent(openApp)
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
-            .setOnlyAlertOnce(true)
+            .setOnlyAlertOnce(!recurring)
             .setAutoCancel(true)
             .build()
         context.getSystemService(NotificationManager::class.java).notify(CHANNEL, id, notice)
@@ -98,15 +100,32 @@ internal object PetReminders {
         manager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, trigger)
     }
 
-    fun schedule(context: Context, id: Int, at: Long, title: String, body: String) {
+    private fun readRule(json: JSONObject) = PetReminderRecurrence(
+        json.getString("frequency"), json.getString("time"),
+        if (json.has("weekday")) json.getInt("weekday") else null,
+        if (json.has("dayOfMonth")) json.getInt("dayOfMonth") else null,
+    )
+
+    fun schedule(context: Context, id: Int, at: Long, title: String, body: String, recurrence: JSONObject?) {
         if (!allowed(context)) throw SecurityException("REMINDER_PERMISSION")
+        val value = JSONObject().put("at", at).put("title", title).put("body", body)
+        if (recurrence != null) {
+            val zone = TimeZone.getDefault()
+            val rule = readRule(recurrence)
+            val now = System.currentTimeMillis()
+            val after = if (rule.nextAfter(now, zone) == at) now else at - 1
+            value.put("recurrence", recurrence).put("zone", zone.id).put("after", after)
+        }
+        saveAndArm(context, id, value)
+    }
+
+    private fun saveAndArm(context: Context, id: Int, value: JSONObject) {
         val prefs = store(context)
         val key = id.toString()
         val old = prefs.getString(key, null)
-        val value = JSONObject().put("at", at).put("title", title).put("body", body)
-        check(prefs.edit().putString(key, value.toString()).commit())
         try {
-            arm(context, id, at)
+            check(prefs.edit().putString(key, value.toString()).commit())
+            arm(context, id, value.getLong("at"))
         } catch (failure: Exception) {
             check(prefs.edit().putString(key, old).commit())
             throw failure
@@ -114,26 +133,57 @@ internal object PetReminders {
     }
 
     fun cancel(context: Context, id: Int) {
-        check(store(context).edit().remove(id.toString()).commit())
-        alarmIntent(context, id, PendingIntent.FLAG_NO_CREATE)?.let {
-            context.getSystemService(AlarmManager::class.java).cancel(it)
-            it.cancel()
+        val prefs = store(context)
+        val key = id.toString()
+        val previous = prefs.getString(key, null)
+        val pending = alarmIntent(context, id, PendingIntent.FLAG_NO_CREATE)
+        if (pending != null) context.getSystemService(AlarmManager::class.java).cancel(pending)
+        if (!prefs.edit().remove(key).commit()) {
+            if (previous != null) {
+                prefs.edit().putString(key, previous).commit()
+                arm(context, id, JSONObject(previous).getLong("at"))
+            }
+            throw IllegalStateException("REMINDER_DELIVERY")
         }
+        pending?.cancel()
         context.getSystemService(NotificationManager::class.java).cancel(CHANNEL, id)
     }
 
     fun deliver(context: Context, id: Int) {
-        val prefs = store(context)
-        val key = id.toString()
-        val reminder = prefs.getString(key, null)?.let(::JSONObject) ?: return
-        if (reminder.getLong("at") > System.currentTimeMillis()) return
+        val reminder = store(context).getString(id.toString(), null)?.let(::JSONObject) ?: return
+        reconcile(context, id, reminder)
+    }
+
+    private fun reconcile(context: Context, id: Int, reminder: JSONObject) {
+        var at = reminder.getLong("at")
+        val now = System.currentTimeMillis()
+        val zone = TimeZone.getDefault()
+        val rule = reminder.optJSONObject("recurrence")?.let(::readRule)
+        val lastDay = reminder.optInt("lastLocalDay")
+        val zoneChanged = rule != null && reminder.optString("zone") != zone.id
+        if (zoneChanged) {
+            at = rule.nextAfter(reminder.getLong("after"), zone, lastDay)
+            reminder.put("at", at).put("zone", zone.id)
+        }
+        if (at > now) {
+            // An alarm from before an edit can already be in the receiver queue.
+            if (zoneChanged) saveAndArm(context, id, reminder) else arm(context, id, at)
+            return
+        }
+        if (rule != null) {
+            // Advance the series before posting. Boot, permission callbacks, and already
+            // queued alarm broadcasts can all reconcile the same outstanding occurrence.
+            val deliveredDay = rule.lastDueDay(now, zone)
+            val next = rule.nextAfter(now, zone, deliveredDay)
+            saveAndArm(context, id, reminder.put("at", next).put("lastLocalDay", deliveredDay).put("after", now))
+        }
         try {
-            post(context, id, reminder.getString("title"), reminder.getString("body"))
+            post(context, id, reminder.getString("title"), reminder.getString("body"), rule != null)
         } catch (_: SecurityException) {
             // Permission may have been revoked while a posted alarm was waking the process.
             return
         }
-        prefs.edit().remove(key).commit()
+        if (rule == null) check(store(context).edit().remove(id.toString()).commit())
     }
 
     fun restore(context: Context) {
@@ -141,8 +191,7 @@ internal object PetReminders {
             val id = key.toIntOrNull() ?: continue
             if (value !is String) continue
             try {
-                val at = JSONObject(value).getLong("at")
-                if (at <= System.currentTimeMillis()) deliver(context, id) else arm(context, id, at)
+                reconcile(context, id, JSONObject(value))
             } catch (failure: Exception) {
                 logFailure(failure)
             }

@@ -142,6 +142,13 @@ fn action_tools_are_offered_by_scope_and_only_declared_calls_return_to_pi() {
     let reminder = wire("schedule_pet_popup", json!({"delaySeconds":600}));
     assert!(parse_reply(&reminder, ChatMode::Pet, &no_rows).is_ok());
     assert!(parse_reply(&reminder, ChatMode::Pet, &read_only).is_err());
+    let monthly_args =
+        json!({"recurrence":{"frequency":"monthly","dayOfMonth":10,"time":"09:00"},"text":"还款"});
+    let monthly = wire("schedule_pet_notification", monthly_args.clone());
+    for mode in [ChatMode::General, ChatMode::Pet] {
+        let accepted = parse_reply(&monthly, mode, &no_rows).unwrap();
+        assert_eq!(accepted.calls[0].arguments, monthly_args);
+    }
     assert!(parse_reply(&action, ChatMode::General, &read_only).is_err());
     assert!(parse_reply(&action, ChatMode::General, &no_rows).is_err());
     let accepted = parse_reply(&action, ChatMode::General, &all).unwrap();
@@ -159,7 +166,10 @@ fn action_tools_are_offered_by_scope_and_only_declared_calls_return_to_pi() {
         wire("mark_bills_paid", json!({"ids":["private-id"]})),
         wire("reset_ledger", json!({})),
         wire("void_bills", json!("all")),
-        wire("schedule_pet_notification", json!({"recurrence":"daily"})),
+        wire(
+            "send_pet_notification",
+            json!({"recurrence":{"frequency":"daily","time":"09:00"}}),
+        ),
     ] {
         assert!(parse_reply(&invalid, ChatMode::Pet, &all).is_err());
     }

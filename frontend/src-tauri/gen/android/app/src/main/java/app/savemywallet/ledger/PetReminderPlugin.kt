@@ -70,7 +70,8 @@ class PetReminderPlugin(private val host: Activity) : Plugin(host) {
     @Command
     fun schedule(invoke: Invoke) = run(invoke) {
         val args = invoke.getArgs()
-        PetReminders.schedule(context, args.getInt("id"), args.getLong("at"), args.getString("title"), args.getString("body"))
+        PetReminders.schedule(context, args.getInt("id"), args.getLong("at"),
+            args.getString("title"), args.getString("body"), args.optJSONObject("recurrence"))
     }
 
     @Command

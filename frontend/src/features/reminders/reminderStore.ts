@@ -1,4 +1,4 @@
-import type { ReminderStatus, ReminderStore, ReminderTask } from './reminderService.ts'
+import type { ReminderChanges, ReminderStatus, ReminderStore, ReminderTask } from './reminderService.ts'
 
 const storeName = 'tasks'
 
@@ -75,12 +75,15 @@ export const reminderStore: ReminderStore = {
       }
     })
   },
-  transition(id: number, from: ReminderStatus, to: ReminderStatus, error?: string) {
+  transition(id: number, from: ReminderStatus, to: ReminderStatus, error?: string, changes?: ReminderChanges,
+    expected?: { at: number; revision: number }) {
     return transaction<ReminderTask | null>('readwrite', (store, finish) => {
       const request = store.get(id)
       request.onsuccess = () => {
         const task: ReminderTask | undefined = request.result
-        if (!task || task.status !== from) return finish(null)
+        if (!task || task.status !== from || (expected &&
+            (task.at !== expected.at || (task.revision ?? 0) !== expected.revision))) return finish(null)
+        Object.assign(task, changes)
         task.status = to
         if (error === undefined) delete task.error
         else task.error = error

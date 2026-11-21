@@ -127,28 +127,56 @@
   },
   {
     "name": "schedule_pet_popup",
-    "description": "Schedule one in-app pet pop-up. Use exactly one of delaySeconds (from the request) or atLocal (device local YYYY-MM-DDTHH:mm). Only include a subject if supplied by the user.",
+    "description": "Schedule a one-time or recurring in-app pet pop-up. Use exactly one of delaySeconds (from the request), atLocal (one-time device local YYYY-MM-DDTHH:mm), or recurrence (one daily, weekly or monthly series at device local time). Only include a subject if supplied by the user.",
     "requiresSelection": false,
     "parameters": {
       "type": "object", "additionalProperties": false,
-      "oneOf": [{ "required": ["delaySeconds"] }, { "required": ["atLocal"] }],
+      "oneOf": [{ "required": ["delaySeconds"] }, { "required": ["atLocal"] }, { "required": ["recurrence"] }],
       "properties": {
         "delaySeconds": { "type": "integer", "minimum": 1 },
         "atLocal": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}$" },
+        "recurrence": {
+          "type": "object", "additionalProperties": false, "required": ["frequency", "time"],
+          "properties": {
+            "frequency": { "type": "string", "enum": ["daily", "weekly", "monthly"] },
+            "time": { "type": "string", "description": "Device local time, 24-hour HH:mm", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$" },
+            "weekday": { "type": "integer", "minimum": 1, "maximum": 7, "description": "Weekly only: ISO weekday, Monday=1 to Sunday=7" },
+            "dayOfMonth": { "type": "integer", "minimum": 1, "maximum": 31, "description": "Monthly only: months without this day are skipped" }
+          },
+          "oneOf": [
+            { "properties": { "frequency": { "const": "daily" }, "weekday": false, "dayOfMonth": false } },
+            { "properties": { "frequency": { "const": "weekly" }, "dayOfMonth": false }, "required": ["weekday"] },
+            { "properties": { "frequency": { "const": "monthly" }, "weekday": false }, "required": ["dayOfMonth"] }
+          ]
+        },
         "text": { "type": "string", "maxLength": 300 }
       }
     }
   },
   {
     "name": "schedule_pet_notification",
-    "description": "Schedule one system notification from the pet. Use exactly one of delaySeconds (from the request) or atLocal (device local YYYY-MM-DDTHH:mm). Only include a subject if supplied by the user.",
+    "description": "Schedule a one-time or recurring system notification from the pet. Use exactly one of delaySeconds (from the request), atLocal (one-time device local YYYY-MM-DDTHH:mm), or recurrence (one daily, weekly or monthly series at device local time). Only include a subject if supplied by the user.",
     "requiresSelection": false,
     "parameters": {
       "type": "object", "additionalProperties": false,
-      "oneOf": [{ "required": ["delaySeconds"] }, { "required": ["atLocal"] }],
+      "oneOf": [{ "required": ["delaySeconds"] }, { "required": ["atLocal"] }, { "required": ["recurrence"] }],
       "properties": {
         "delaySeconds": { "type": "integer", "minimum": 1 },
         "atLocal": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}$" },
+        "recurrence": {
+          "type": "object", "additionalProperties": false, "required": ["frequency", "time"],
+          "properties": {
+            "frequency": { "type": "string", "enum": ["daily", "weekly", "monthly"] },
+            "time": { "type": "string", "description": "Device local time, 24-hour HH:mm", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$" },
+            "weekday": { "type": "integer", "minimum": 1, "maximum": 7, "description": "Weekly only: ISO weekday, Monday=1 to Sunday=7" },
+            "dayOfMonth": { "type": "integer", "minimum": 1, "maximum": 31, "description": "Monthly only: months without this day are skipped" }
+          },
+          "oneOf": [
+            { "properties": { "frequency": { "const": "daily" }, "weekday": false, "dayOfMonth": false } },
+            { "properties": { "frequency": { "const": "weekly" }, "dayOfMonth": false }, "required": ["weekday"] },
+            { "properties": { "frequency": { "const": "monthly" }, "weekday": false }, "required": ["dayOfMonth"] }
+          ]
+        },
         "text": { "type": "string", "maxLength": 300 }
       }
     }

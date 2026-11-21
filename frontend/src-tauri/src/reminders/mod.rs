@@ -5,6 +5,44 @@ const DELIVERY: &str = "REMINDER_DELIVERY";
 const PERMISSION: &str = "REMINDER_PERMISSION";
 const TIME: &str = "REMINDER_TIME";
 
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(tag = "frequency", rename_all = "lowercase", deny_unknown_fields)]
+pub(super) enum ReminderRecurrence {
+    Daily {
+        time: String,
+    },
+    Weekly {
+        time: String,
+        weekday: u8,
+    },
+    Monthly {
+        time: String,
+        #[serde(rename = "dayOfMonth")]
+        day_of_month: u8,
+    },
+}
+
+impl ReminderRecurrence {
+    fn clock(&self) -> Result<chrono::NaiveTime, String> {
+        let time = match self {
+            Self::Daily { time } => time,
+            Self::Weekly {
+                time,
+                weekday: 1..=7,
+            } => time,
+            Self::Monthly {
+                time,
+                day_of_month: 1..=31,
+            } => time,
+            _ => return Err(TIME.into()),
+        };
+        if time.len() != 5 || time.as_bytes()[2] != b':' {
+            return Err(TIME.into());
+        }
+        chrono::NaiveTime::parse_from_str(time, "%H:%M").map_err(|_| TIME.into())
+    }
+}
+
 #[cfg(windows)]
 pub(super) mod windows;
 
@@ -83,22 +121,26 @@ pub(super) fn reminder_schedule(
     title: String,
     body: String,
     request_permission: bool,
+    recurrence: Option<ReminderRecurrence>,
 ) -> Result<(), String> {
     validate(id, &title, &body)?;
     if at <= now_millis() {
         return Err(TIME.into());
     }
+    if let Some(rule) = &recurrence {
+        rule.clock()?;
+    }
     #[cfg(windows)]
     {
         let _ = request_permission;
-        windows::schedule(app.config(), id, at, &title, &body)
+        windows::schedule(app.config(), id, at, &title, &body, recurrence.as_ref())
     }
     #[cfg(target_os = "android")]
     {
         android::send(
             &app,
             "schedule",
-            serde_json::json!({ "id": id, "at": at, "title": title, "body": body }),
+            serde_json::json!({ "id": id, "at": at, "title": title, "body": body, "recurrence": recurrence }),
             request_permission,
         )
     }

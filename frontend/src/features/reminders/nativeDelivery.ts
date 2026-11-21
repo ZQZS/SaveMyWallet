@@ -1,4 +1,5 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
+import type { ReminderRecurrence } from './recurrence.ts'
 
 async function deliver(command: string, args: Record<string, unknown>) {
   if (!isTauri()) throw new Error('REMINDER_UNAVAILABLE')
@@ -12,8 +13,8 @@ async function deliver(command: string, args: Record<string, unknown>) {
 }
 
 export const nativeDelivery = {
-  schedule(id: number, at: number, title: string, body: string, requestPermission = true) {
-    return deliver('reminder_schedule', { id, at, title, body, requestPermission })
+  schedule(id: number, at: number, title: string, body: string, requestPermission = true, recurrence?: ReminderRecurrence) {
+    return deliver('reminder_schedule', { id, at, title, body, requestPermission, recurrence })
   },
   cancel(id: number) {
     return deliver('reminder_cancel', { id })

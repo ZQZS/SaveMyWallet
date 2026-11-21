@@ -6,6 +6,7 @@ import { contentText } from '@earendil-works/pi-ai/utils/text'
 import { validateToolCall } from '@earendil-works/pi-ai/utils/validation'
 import actionDefinitions from '../../../resources/ai/ledger-action-tools.json' with { type: 'json' }
 import type { LedgerActionName } from '../../features/ai/ledgerActions.ts'
+import { parseReminderRecurrence } from '../../features/reminders/recurrence.ts'
 import { isReminderAction, type ReminderActionName } from '../../features/reminders/reminderActions.ts'
 import { petChatDetailsPayload, type PetChatDetails } from '../../features/pets/petChatDetails.ts'
 import { requestAgentTurn, type PetChatInput } from './deepseek.ts'
@@ -131,6 +132,7 @@ export async function chatWithAgent(input: AgentChatInput, signal: AbortSignal, 
             : args
           const fields = Object.keys(normalized).sort().map(key => {
             const value = normalized[key]
+            if (key === 'recurrence') return [key, parseReminderRecurrence(value)]
             return [key, key === 'rows' && Array.isArray(value) ? [...value].sort((a, b) => a - b) : value]
           })
           const key = JSON.stringify([definition.name, fields])

@@ -1,13 +1,15 @@
 import { readonly, ref, shallowRef } from 'vue'
 import type { PetCharacter } from '../pets/catalog.ts'
+import { nextReminderOccurrence, parseReminderRecurrence, previousReminderOccurrence, type ReminderRecurrence } from './recurrence.ts'
 
 export type ReminderChannel = 'popup' | 'notification'
-export type ReminderStatus = 'preparing' | 'scheduled' | 'completed' | 'cancelling' | 'cancelled' | 'failed'
+export type ReminderStatus = 'preparing' | 'scheduled' | 'editing' | 'completed' | 'cancelling' | 'cancelled' | 'failed'
 
 export interface ReminderInput {
   channel: ReminderChannel
   text: string
   at?: number
+  recurrence?: ReminderRecurrence
   pet?: PetCharacter
 }
 
@@ -17,21 +19,33 @@ interface ReminderWording {
   message: string
 }
 
-export interface ReminderTask extends ReminderWording {
-  id: number
+interface ReminderPlan extends ReminderWording {
   channel: ReminderChannel
   text: string
-  createdAt: number
   at: number
   scheduled: boolean
+  recurrence?: ReminderRecurrence
+  recurrenceAfter?: number
+  timeZone?: string
+  lastLocalDay?: string
+}
+
+export interface ReminderTask extends ReminderPlan {
+  id: number
+  createdAt: number
   status: ReminderStatus
   error?: string
+  revision?: number
+  pendingEdit?: ReminderPlan
 }
+
+export type ReminderChanges = Partial<ReminderPlan> & Pick<Partial<ReminderTask>, 'pendingEdit' | 'revision'>
 
 export interface ReminderStore {
   list(): Promise<ReminderTask[]>
   add(task: Omit<ReminderTask, 'id'>): Promise<ReminderTask>
-  transition(id: number, from: ReminderStatus, to: ReminderStatus, error?: string): Promise<ReminderTask | null>
+  transition(id: number, from: ReminderStatus, to: ReminderStatus, error?: string, changes?: ReminderChanges,
+    expected?: { at: number; revision: number }): Promise<ReminderTask | null>
   remove(id: number, from: ReminderStatus): Promise<boolean>
 }
 
@@ -40,7 +54,7 @@ interface ReminderServices {
   prepareText(text: string, pet?: PetCharacter, at?: number): Promise<ReminderWording>
   delivery: {
     notify(id: number, title: string, body: string): Promise<void>
-    schedule(id: number, at: number, title: string, body: string, requestPermission?: boolean): Promise<void>
+    schedule(id: number, at: number, title: string, body: string, requestPermission?: boolean, recurrence?: ReminderRecurrence): Promise<void>
     cancel(id: number): Promise<void>
   }
   now(): number
@@ -52,6 +66,40 @@ interface ReminderServices {
 function errorCode(cause: unknown, fallback: string) {
   const message = cause instanceof Error ? cause.message : String(cause)
   return /^(?:REMINDER_[A-Z_]+|NATIVE_ONLY)$/.test(message) ? message : fallback
+}
+
+function localDay(at: number) {
+  const date = new Date(at)
+  return [date.getFullYear(), date.getMonth() + 1, date.getDate()].map((value, i) =>
+    String(value).padStart(i === 0 ? 4 : 2, '0')).join('-')
+}
+
+function nextUnseen(recurrence: ReminderRecurrence, after: number, lastLocalDay?: string) {
+  let next = nextReminderOccurrence(recurrence, after)
+  // Travelling west can put the same local date and time in the future again.
+  while (lastLocalDay && localDay(next) <= lastLocalDay) next = nextReminderOccurrence(recurrence, next)
+  return next
+}
+
+function inCurrentZone(plan: ReminderPlan, timeZone: string) {
+  if (!plan.recurrence || plan.timeZone === timeZone) return plan
+  const at = nextUnseen(plan.recurrence, plan.recurrenceAfter ?? plan.at - 1, plan.lastLocalDay)
+  return { ...plan, at, timeZone }
+}
+
+function planInput(input: ReminderInput, now: number) {
+  if (input.channel !== 'popup' && input.channel !== 'notification') throw new Error('REMINDER_STATE')
+  if (typeof input.text !== 'string' || Array.from(input.text.trim()).length > 300) throw new Error('REMINDER_INVALID_TEXT')
+  const recurrence = input.recurrence === undefined ? undefined : parseReminderRecurrence(input.recurrence)
+  const first = recurrence ? nextReminderOccurrence(recurrence, now) : now
+  const at = input.at ?? first
+  const scheduled = input.at !== undefined || recurrence !== undefined
+  if (!Number.isSafeInteger(at) || !Number.isFinite(new Date(at).getTime()) || (scheduled && at <= now)
+      || (recurrence && nextReminderOccurrence(recurrence, at - 1) !== at)) throw new Error('REMINDER_INVALID_TIME')
+  return { channel: input.channel, text: input.text.trim(), at, scheduled, recurrence, lastLocalDay: undefined,
+    // Anchor the series to its first occurrence when an explicit future start skips earlier matches.
+    recurrenceAfter: recurrence ? (at === first ? now : at - 1) : undefined,
+    timeZone: recurrence ? Intl.DateTimeFormat().resolvedOptions().timeZone : undefined }
 }
 
 export function createReminderService(services: ReminderServices) {
@@ -71,11 +119,16 @@ export function createReminderService(services: ReminderServices) {
     return result
   }
 
-  async function transition(task: ReminderTask, status: ReminderStatus, reason?: string) {
-    const updated = await store.transition(task.id, task.status, status, reason)
+  async function transition(task: ReminderTask, status: ReminderStatus, reason?: string, changes?: ReminderChanges) {
+    const updated = await store.transition(task.id, task.status, status, reason, changes, { at: task.at, revision: task.revision ?? 0 })
     if (!updated) throw new Error('REMINDER_STATE')
     services.onChange?.()
     return updated
+  }
+
+  function schedule(id: number, plan: ReminderPlan, requestPermission: boolean) {
+    if (plan.recurrence) return delivery.schedule(id, plan.at, plan.petName, plan.message, requestPermission, plan.recurrence)
+    return delivery.schedule(id, plan.at, plan.petName, plan.message, requestPermission)
   }
 
   async function reload() {
@@ -92,12 +145,18 @@ export function createReminderService(services: ReminderServices) {
       return updated
     }
     // Replaying an immediate notification after a crash could deliver it twice.
-    if (recovering && (!task.scheduled || task.at <= now())) {
+    const local = inCurrentZone(task, Intl.DateTimeFormat().resolvedOptions().timeZone)
+    if (local !== task) task = await transition(task, 'preparing', undefined, { at: local.at, timeZone: local.timeZone })
+    if (task.recurrence && task.at <= now()) {
+      const after = now()
+      task = await transition(task, 'preparing', undefined, { at: nextUnseen(task.recurrence, after, task.lastLocalDay), recurrenceAfter: after })
+    }
+    if (recovering && !task.recurrence && (!task.scheduled || task.at <= now())) {
       return transition(task, 'failed', 'REMINDER_INTERRUPTED')
     }
-    const future = task.scheduled && task.at > now()
+    const future = Boolean(task.recurrence) || (task.scheduled && task.at > now())
     try {
-      if (future) await delivery.schedule(task.id, task.at, task.petName, task.message, !recovering)
+      if (future) await schedule(task.id, task, !recovering)
       else await delivery.notify(task.id, task.petName, task.message)
     } catch (cause) {
       const reason = errorCode(cause, 'REMINDER_DELIVERY')
@@ -126,24 +185,70 @@ export function createReminderService(services: ReminderServices) {
     } catch (cause) {
       const reason = errorCode(cause, 'REMINDER_DELIVERY')
       // The OS may still deliver this schedule. Keep it available to cancel.
-      await transition(task, 'scheduled', reason)
+      await transition(task, task.pendingEdit ? 'editing' : 'scheduled', reason)
       throw new Error(reason)
     }
-    return transition(task, 'cancelled')
+    return transition(task, 'cancelled', undefined, { pendingEdit: undefined })
+  }
+
+  // Keep the previous plan and the requested replacement until the OS operation succeeds.
+  // Scheduling by the same ID and cancelling by ID are idempotent across a process restart.
+  async function finishEdit(task: ReminderTask, recovering = false) {
+    let plan = task.pendingEdit
+    if (!plan) throw new Error('REMINDER_STATE')
+    plan = inCurrentZone(plan, Intl.DateTimeFormat().resolvedOptions().timeZone)
+    let status: ReminderStatus = 'scheduled'
+    let failure: string | undefined
+    try {
+      if (plan.channel === 'notification') {
+        const time = now()
+        if (plan.recurrence && plan.at <= time) {
+          plan = { ...plan, at: nextUnseen(plan.recurrence, time, plan.lastLocalDay), recurrenceAfter: time }
+        }
+        if (plan.at > time) await schedule(task.id, plan, !recovering)
+        else if (recovering) {
+          // A one-shot replacement may have fired before its receipt was saved.
+          // Clear any surviving old registration and never post another notification.
+          await delivery.cancel(task.id)
+          status = 'failed'
+          failure = 'REMINDER_INTERRUPTED'
+        } else throw new Error('REMINDER_INVALID_TIME')
+      } else if (task.channel === 'notification') {
+        await delivery.cancel(task.id)
+      }
+    } catch (cause) {
+      const reason = errorCode(cause, 'REMINDER_DELIVERY')
+      // The replacement may already have been accepted before the previous
+      // process exited. Keep its intent retryable until the OS confirms it.
+      if (recovering) return task.error === reason ? task : transition(task, 'editing', reason)
+      // A rejected replacement leaves the previous OS schedule intact.
+      await transition(task, 'scheduled', reason, { pendingEdit: undefined })
+      throw new Error(reason)
+    }
+    return transition(task, status, failure, { ...plan, pendingEdit: undefined, revision: (task.revision ?? 0) + 1 })
   }
 
   async function reconcile() {
     const records = (await store.list()).sort((a, b) => a.at - b.at || a.id - b.id)
-    for (const task of records) {
-      if (task.status === 'preparing') await register(task, true)
-      else if (task.status === 'cancelling') await finishCancellation(task)
-      else if (task.status === 'scheduled' && task.at <= now()) {
-        if (task.channel === 'notification') {
-          // Already handed to the OS. Reaching its deadline never sends it again.
-          await transition(task, 'completed')
-        } else if (visible() && !activePopup.value) {
-          activePopup.value = await transition(task, 'completed')
-        }
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone
+    for (let task of records) {
+      if (task.status === 'preparing') { await register(task, true); continue }
+      if (task.status === 'cancelling') { await finishCancellation(task); continue }
+      if (task.status === 'editing') { await finishEdit(task, true); continue }
+      if (task.status !== 'scheduled') continue
+      const local = inCurrentZone(task, zone)
+      if (local !== task) task = await transition(task, 'scheduled', undefined, { at: local.at, timeZone: zone })
+      const time = now()
+      if (task.at > time || (task.channel === 'popup' && (!visible() || activePopup.value))) continue
+      if (task.recurrence) {
+        // A recurring system notification is already owned by the OS. For a popup
+        // claim the entire overdue interval before displaying one catch-up message.
+        const lastLocalDay = localDay(previousReminderOccurrence(task.recurrence, time))
+        await transition(task, 'scheduled', undefined, { at: nextUnseen(task.recurrence, time, lastLocalDay), recurrenceAfter: time, lastLocalDay })
+        if (task.channel === 'popup') activePopup.value = task
+      } else {
+        const completed = await transition(task, 'completed')
+        if (task.channel === 'popup') activePopup.value = completed
       }
     }
     await reload()
@@ -157,18 +262,11 @@ export function createReminderService(services: ReminderServices) {
   }
 
   async function create(input: ReminderInput): Promise<ReminderTask> {
-    if (input.channel !== 'popup' && input.channel !== 'notification') throw new Error('REMINDER_STATE')
-    if (typeof input.text !== 'string' || Array.from(input.text.trim()).length > 300) throw new Error('REMINDER_INVALID_TEXT')
-    const text = input.text.trim()
     const createdAt = now()
-    const at = input.at ?? createdAt
-    if (!Number.isSafeInteger(at) || !Number.isFinite(new Date(at).getTime()) || (input.at !== undefined && at <= createdAt)) {
-      throw new Error('REMINDER_INVALID_TIME')
-    }
-    const wording = await services.prepareText(text, input.pet, input.at)
+    const plan = planInput(input, createdAt)
+    const wording = await services.prepareText(plan.text, input.pet, plan.scheduled ? plan.at : undefined)
     return run(async () => {
-      const task = await store.add({ channel: input.channel, text, ...wording, createdAt, at,
-        scheduled: input.at !== undefined, status: input.channel === 'popup' ? 'scheduled' : 'preparing' })
+      const task = await store.add({ ...plan, ...wording, createdAt, status: plan.channel === 'popup' ? 'scheduled' : 'preparing' })
       services.onChange?.()
       try {
         if (task.channel === 'notification') return await register(task)
@@ -186,13 +284,37 @@ export function createReminderService(services: ReminderServices) {
     })
   }
 
+  async function edit(id: number, input: ReminderInput, expectedRevision?: number) {
+    const previous = (await store.list()).find(item => item.id === id)
+    if (!previous || previous.status !== 'scheduled' || !previous.scheduled
+        || (expectedRevision !== undefined && expectedRevision !== (previous.revision ?? 0))) throw new Error('REMINDER_STATE')
+    const plan = planInput(input, now())
+    if (!plan.scheduled) throw new Error('REMINDER_INVALID_TIME')
+    const { petId, petName, message } = previous
+    const wording = previous.text === plan.text ? { petId, petName, message } : await services.prepareText(plan.text, input.pet, plan.at)
+    return run(async () => {
+      const current = (await store.list()).find(item => item.id === id)
+      if (!current || current.status !== 'scheduled' || (current.revision ?? 0) !== (previous.revision ?? 0)) throw new Error('REMINDER_STATE')
+      const pendingEdit: ReminderPlan = { ...plan, ...wording }
+      if (current.lastLocalDay && plan.recurrence && JSON.stringify(current.recurrence) === JSON.stringify(plan.recurrence)) {
+        pendingEdit.lastLocalDay = current.lastLocalDay
+        if (localDay(plan.at) <= current.lastLocalDay) pendingEdit.at = nextUnseen(plan.recurrence, now(), current.lastLocalDay)
+      }
+      try {
+        const task = await transition(current, 'editing', undefined, { pendingEdit })
+        await finishEdit(task)
+      } finally { await reload() }
+    })
+  }
+
   function cancel(id: number): Promise<void> {
     return run(async () => {
       const task = (await store.list()).find(item => item.id === id)
-      if (!task || task.status !== 'scheduled') throw new Error('REMINDER_STATE')
+      if (!task || (task.status !== 'scheduled' && !(task.status === 'editing' && task.error))) throw new Error('REMINDER_STATE')
       try {
-        if (task.channel === 'popup') await transition(task, 'cancelled')
-        else if (task.at > now()) await finishCancellation(await transition(task, 'cancelling'))
+        if (task.pendingEdit) await finishCancellation(await transition(task, 'cancelling'))
+        else if (task.channel === 'popup') await transition(task, 'cancelled')
+        else if (task.recurrence || task.at > now()) await finishCancellation(await transition(task, 'cancelling'))
         else {
           await transition(task, 'completed')
           throw new Error('REMINDER_STATE')
@@ -222,5 +344,5 @@ export function createReminderService(services: ReminderServices) {
   }
 
   return { tasks: readonly(tasks), ready: readonly(ready), error: readonly(error), activePopup: readonly(activePopup),
-    refresh, create, cancel, remove, dismissPopup }
+    refresh, create, edit, cancel, remove, dismissPopup }
 }

@@ -182,6 +182,9 @@ test('both chat modes expose all pet reminders without ledger sharing and finish
     ['send_pet_notification', { text: '带钥匙' }],
     ['schedule_pet_popup', { delaySeconds: 600 }],
     ['schedule_pet_notification', { atLocal: '2030-06-11T09:05' }],
+    ['schedule_pet_popup', { recurrence: { frequency: 'daily', time: '08:00' } }],
+    ['schedule_pet_popup', { recurrence: { frequency: 'weekly', time: '18:30', weekday: 7 } }],
+    ['schedule_pet_notification', { text: '还款', recurrence: { frequency: 'monthly', time: '09:00', dayOfMonth: 10 } }],
   ]
   for (const input of [general, { ...general, mode: 'pet', character: { name: 'Fox', description: '', voiceSample: '' } }]) {
     let requests = 0
@@ -190,7 +193,8 @@ test('both chat modes expose all pet reminders without ledger sharing and finish
       assert.equal(payload.details, undefined)
       assert.equal(payload.facts, undefined)
       const duplicate = ['schedule_pet_popup', { delaySeconds: 600, text: '  ' }]
-      return { text: '', calls: [...cases, duplicate].map(([name, args], i) => ({ id: 'remind' + i, name, arguments: args })) }
+      const repeatedSeries = ['schedule_pet_notification', { recurrence: { dayOfMonth: 10, time: '09:00', frequency: 'monthly' }, text: ' 还款 ' }]
+      return { text: '', calls: [...cases, duplicate, repeatedSeries].map(([name, args], i) => ({ id: 'remind' + i, name, arguments: args })) }
     })
     const reviewed = []
     const answer = await chatWithAgent(input, new AbortController().signal, async (name, args) => {
@@ -203,11 +207,20 @@ test('both chat modes expose all pet reminders without ledger sharing and finish
   }
 })
 
-test('inconsistent and recurring reminder tool arguments cannot start a write', async () => {
-  for (const args of [{}, { atLocal: '2030-06-11T09:05', delaySeconds: 60 }, { delaySeconds: 60, repeat: 'daily' }]) {
+test('inconsistent time modes and invalid recurrence rules cannot start a write', async () => {
+  const daily = { frequency: 'daily', time: '09:00' }
+  for (const args of [
+    {}, { atLocal: '2030-06-11T09:05', delaySeconds: 60 }, { delaySeconds: 60, repeat: 'daily' },
+    { atLocal: '2030-06-11T09:05', recurrence: daily }, { delaySeconds: 60, recurrence: daily },
+    { recurrence: { ...daily, weekday: 4 } }, { recurrence: { ...daily, time: '24:00' } },
+    { recurrence: { ...daily, frequency: 'weekly' } }, { recurrence: { ...daily, frequency: 'weekly', weekday: 0 } },
+    { recurrence: { ...daily, frequency: 'monthly', dayOfMonth: 32 } },
+    { recurrence: { ...daily, frequency: 'monthly', weekday: 3, dayOfMonth: 10 } },
+    { recurrence: { ...daily, endDate: '2030-12-01' } },
+  ]) {
     mockIPC(() => ({ text: '', calls: [{ id: 'schedule', name: 'schedule_pet_popup', arguments: args }] }))
     let reviews = 0
-    await assert.rejects(chatWithAgent(general, new AbortController().signal, async () => { reviews++ }), /AI_BAD_RESPONSE/)
+    await assert.rejects(chatWithAgent(general, new AbortController().signal, async () => { reviews++ }), /AI_BAD_RESPONSE/, JSON.stringify(args))
     assert.equal(reviews, 0)
   }
 })

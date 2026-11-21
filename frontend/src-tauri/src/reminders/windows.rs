@@ -1,6 +1,8 @@
-use super::{now_millis, DELIVERY, PERMISSION, TIME};
-use chrono::{DateTime, SecondsFormat};
-use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+mod calendar;
+
+use super::{now_millis, ReminderRecurrence, DELIVERY, PERMISSION, TIME};
+use chrono::{DateTime, Local, SecondsFormat};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use std::{env, fs, path::PathBuf, time::Duration};
 use tauri::utils::config::{AppDirectoriesOverride, Config};
 use windows::{
@@ -50,14 +52,26 @@ fn database(config: &Config) -> Result<Connection, String> {
     let db = Connection::open(dir.join(DATABASE_FILE)).map_err(|_| DELIVERY)?;
     db.busy_timeout(Duration::from_secs(10))
         .map_err(|_| DELIVERY)?;
+    init_delivery_db(&db)?;
+    Ok(db)
+}
+
+fn init_delivery_db(db: &Connection) -> Result<(), String> {
+    // Older one-shot schedules have a pending row and no registration metadata.
     db.execute_batch("PRAGMA secure_delete = ON;
-        CREATE TABLE IF NOT EXISTS pending (id INTEGER PRIMARY KEY, at INTEGER NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL)").map_err(|_| DELIVERY)?;
+        PRAGMA foreign_keys = ON;
+        CREATE TABLE IF NOT EXISTS pending (id INTEGER PRIMARY KEY, at INTEGER NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS registrations (
+            id INTEGER PRIMARY KEY REFERENCES pending(id) ON DELETE CASCADE,
+            token INTEGER NOT NULL, rule TEXT, first_day INTEGER, last_day INTEGER
+        )").map_err(|_| DELIVERY)?;
     db.execute(
-        "DELETE FROM pending WHERE at < ?1",
+        "DELETE FROM pending WHERE at < ?1 AND NOT EXISTS
+            (SELECT 1 FROM registrations WHERE registrations.id = pending.id AND rule IS NOT NULL)",
         [now_millis() - CATCH_UP_SECONDS * 1000],
     )
     .map_err(|_| DELIVERY)?;
-    Ok(db)
+    Ok(())
 }
 
 pub(crate) fn purge_expired(config: &Config) {
@@ -178,7 +192,7 @@ fn task_name(config: &Config, id: i32) -> Result<BSTR, String> {
     )))
 }
 
-fn task_xml(id: i32, at: i64, exe: &str) -> Result<String, String> {
+fn one_time_trigger(at: i64) -> Result<String, String> {
     let secs = at.div_euclid(1000) + i64::from(at.rem_euclid(1000) != 0);
     let boundary = |seconds| {
         DateTime::from_timestamp(seconds, 0)
@@ -187,14 +201,83 @@ fn task_xml(id: i32, at: i64, exe: &str) -> Result<String, String> {
     };
     let start = boundary(secs)?;
     let end = boundary(secs + CATCH_UP_SECONDS)?;
+    Ok(format!("<TimeTrigger><StartBoundary>{start}</StartBoundary><EndBoundary>{end}</EndBoundary></TimeTrigger>"))
+}
+
+fn task_xml(id: i32, at: i64, token: i64, exe: &str, trigger: &str, recurring: bool) -> String {
     let exe = escape_xml(exe);
-    Ok(format!(
+    let expiry = if recurring {
+        ""
+    } else {
+        "<DeleteExpiredTaskAfter>PT0S</DeleteExpiredTaskAfter>"
+    };
+    format!(
         r#"<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-<Triggers><TimeTrigger><StartBoundary>{start}</StartBoundary><EndBoundary>{end}</EndBoundary></TimeTrigger></Triggers>
+<Triggers>{trigger}</Triggers>
 <Principals><Principal id="User"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
-<Settings><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><StartWhenAvailable>true</StartWhenAvailable><DeleteExpiredTaskAfter>PT0S</DeleteExpiredTaskAfter><ExecutionTimeLimit>PT2M</ExecutionTimeLimit></Settings>
-<Actions Context="User"><Exec><Command>{exe}</Command><Arguments>{DELIVERY_ARG} {id} {at}</Arguments></Exec></Actions></Task>"#
-    ))
+<Settings><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><StartWhenAvailable>true</StartWhenAvailable>{expiry}<ExecutionTimeLimit>PT2M</ExecutionTimeLimit></Settings>
+<Actions Context="User"><Exec><Command>{exe}</Command><Arguments>{DELIVERY_ARG} {id} {at} {token}</Arguments></Exec></Actions></Task>"#
+    )
+}
+
+fn task_missing(error: &windows::core::Error) -> bool {
+    [
+        ERROR_FILE_NOT_FOUND.to_hresult(),
+        ERROR_PATH_NOT_FOUND.to_hresult(),
+    ]
+    .contains(&error.code())
+}
+
+fn current_task(folder: &ITaskFolder, name: &BSTR) -> Result<Option<BSTR>, String> {
+    unsafe {
+        match folder.GetTask(name) {
+            Ok(task) => task
+                .Xml()
+                .map(Some)
+                .map_err(|error| os_error("read prior task")(error).into()),
+            Err(error) if task_missing(&error) => Ok(None),
+            Err(error) => Err(os_error("find prior task")(error).into()),
+        }
+    }
+}
+
+fn set_task(folder: &ITaskFolder, name: &BSTR, xml: Option<&BSTR>) -> Result<(), String> {
+    if let Some(xml) = xml {
+        let empty = VARIANT::default();
+        unsafe {
+            folder.RegisterTask(
+                name,
+                xml,
+                TASK_CREATE_OR_UPDATE.0,
+                &empty,
+                &empty,
+                TASK_LOGON_INTERACTIVE_TOKEN,
+                &empty,
+            )
+        }
+        .map_err(os_error("register task"))?;
+    } else if let Err(error) = unsafe { folder.DeleteTask(name, 0) } {
+        if !task_missing(&error) {
+            return Err(os_error("remove task")(error).into());
+        }
+    }
+    Ok(())
+}
+
+fn commit_schedule(
+    tx: Transaction<'_>,
+    folder: &ITaskFolder,
+    name: &BSTR,
+    replacement: Option<&BSTR>,
+) -> Result<(), String> {
+    // Keep the previous trigger available for rollback if SQLite cannot commit the OS change.
+    let previous = current_task(folder, name)?;
+    set_task(folder, name, replacement)?;
+    if tx.commit().is_err() {
+        set_task(folder, name, previous.as_ref())?;
+        return Err(DELIVERY.into());
+    }
+    Ok(())
 }
 
 pub(super) fn schedule(
@@ -203,13 +286,20 @@ pub(super) fn schedule(
     at: i64,
     title: &str,
     body: &str,
+    rule: Option<&ReminderRecurrence>,
 ) -> Result<(), String> {
     let _apartment = Apartment::enter()?;
     notifier(config)?;
     let folder = task_folder()?;
     let name = task_name(config, id)?;
     let exe = env::current_exe().map_err(|_| DELIVERY)?;
-    let xml = BSTR::from(task_xml(id, at, exe.to_str().ok_or(DELIVERY)?)?);
+    let (trigger, first_day) = match rule {
+        Some(rule) => {
+            let (trigger, first) = rule.trigger(at)?;
+            (trigger, Some(first))
+        }
+        None => (one_time_trigger(at)?, None),
+    };
     let mut db = database(config)?;
     let tx = db
         .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -219,20 +309,27 @@ pub(super) fn schedule(
         params![id, at, title, body],
     )
     .map_err(|_| DELIVERY)?;
-    let empty = VARIANT::default();
-    unsafe {
-        folder.RegisterTask(
-            &name,
-            &xml,
-            TASK_CREATE_OR_UPDATE.0,
-            &empty,
-            &empty,
-            TASK_LOGON_INTERACTIVE_TOKEN,
-            &empty,
+    let rule_json = rule
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|_| TIME)?;
+    let token: i64 = tx
+        .query_row(
+            "INSERT INTO registrations (id, token, rule, first_day)
+         VALUES (?1, abs(random()) | 1, ?2, ?3) RETURNING token",
+            params![id, rule_json, first_day],
+            |r| r.get(0),
         )
-    }
-    .map_err(os_error("register task"))?;
-    tx.commit().map_err(|_| DELIVERY.into())
+        .map_err(|_| DELIVERY)?;
+    let xml = BSTR::from(task_xml(
+        id,
+        at,
+        token,
+        exe.to_str().ok_or(DELIVERY)?,
+        &trigger,
+        rule.is_some(),
+    ));
+    commit_schedule(tx, &folder, &name, Some(&xml))
 }
 
 pub(super) fn cancel(config: &Config, id: i32) -> Result<(), String> {
@@ -243,52 +340,78 @@ pub(super) fn cancel(config: &Config, id: i32) -> Result<(), String> {
     let tx = db
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|_| DELIVERY)?;
-    if let Err(error) = unsafe { folder.DeleteTask(&name, 0) } {
-        if ![
-            ERROR_FILE_NOT_FOUND.to_hresult(),
-            ERROR_PATH_NOT_FOUND.to_hresult(),
-        ]
-        .contains(&error.code())
-        {
-            return Err(DELIVERY.into());
-        }
-    }
     tx.execute("DELETE FROM pending WHERE id = ?1", [id])
         .map_err(|_| DELIVERY)?;
-    tx.commit().map_err(|_| DELIVERY.into())
+    commit_schedule(tx, &folder, &name, None)
 }
 
-fn deliver_pending(config: &Config, id: i32, at: i64) -> Result<(), String> {
-    if id <= 0 || at > now_millis() {
-        return Err(TIME.into());
-    }
-    let mut db = database(config)?;
-    // Serialize cancellation, replacement and repeated OS launches, even across processes.
-    let tx = db
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|_| DELIVERY)?;
-    let row: Option<(String, String)> = tx
+fn claim_delivery(
+    tx: &Transaction<'_>,
+    id: i32,
+    at: i64,
+    token: Option<i64>,
+    now: DateTime<Local>,
+) -> Result<Option<(String, String)>, String> {
+    let row = tx
         .query_row(
-            "SELECT title, body FROM pending WHERE id = ?1 AND at = ?2",
-            params![id, at],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            "SELECT title, body, rule, first_day, last_day FROM pending p
+             LEFT JOIN registrations r USING(id) WHERE p.id = ?1 AND p.at = ?2 AND r.token IS ?3",
+            params![id, at, token],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, Option<i32>>(3)?,
+                    r.get::<_, Option<i32>>(4)?,
+                ))
+            },
         )
         .optional()
         .map_err(|_| DELIVERY)?;
-    let mut delivered = Ok(());
-    if let Some((title, body)) = row {
-        delivered = notify(config, id, &title, &body);
+    let Some((title, body, rule, first_day, last_day)) = row else {
+        return Ok(None);
+    };
+    if let Some(rule) = rule {
+        let rule: ReminderRecurrence = serde_json::from_str(&rule).map_err(|_| DELIVERY)?;
+        let Some(slot) = rule.latest_slot(now, first_day.ok_or(DELIVERY)?)? else {
+            return Ok(None);
+        };
+        if last_day.is_some_and(|last| last >= slot) {
+            return Ok(None);
+        }
         tx.execute(
-            "DELETE FROM pending WHERE id = ?1 AND at = ?2",
-            params![id, at],
+            "UPDATE registrations SET last_day = ?1 WHERE id = ?2",
+            params![slot, id],
         )
         .map_err(|_| DELIVERY)?;
+    } else {
+        if at > now.timestamp_millis() {
+            return Err(TIME.into());
+        }
+        tx.execute("DELETE FROM pending WHERE id = ?1", [id])
+            .map_err(|_| DELIVERY)?;
     }
+    Ok(Some((title, body)))
+}
+
+fn deliver_pending(config: &Config, id: i32, at: i64, token: Option<i64>) -> Result<(), String> {
+    let mut db = database(config)?;
+    // Hold the same lock used for edits and cancellation through the OS handoff.
+    let tx = db
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|_| DELIVERY)?;
+    let delivered = match claim_delivery(&tx, id, at, token, Local::now())? {
+        Some((title, body)) => notify(config, id, &title, &body),
+        None => Ok(()),
+    };
     tx.commit().map_err(|_| DELIVERY)?;
     delivered
 }
 
-fn parse_helper_args(mut args: impl Iterator<Item = String>) -> Option<Result<(i32, i64), String>> {
+fn parse_helper_args(
+    mut args: impl Iterator<Item = String>,
+) -> Option<Result<(i32, i64, Option<i64>), String>> {
     if args.next().as_deref() != Some(DELIVERY_ARG) {
         return None;
     }
@@ -296,25 +419,39 @@ fn parse_helper_args(mut args: impl Iterator<Item = String>) -> Option<Result<(i
         .next()
         .and_then(|s| s.parse::<i32>().ok())
         .zip(args.next().and_then(|s| s.parse::<i64>().ok()));
+    // Legacy one-shot triggers installed by 0.6.1 supply only the ID and deadline.
+    let token = args.next().map(|s| s.parse::<i64>());
     Some(
-        pair.filter(|(id, at)| *id > 0 && *at > 0 && args.next().is_none())
+        pair.and_then(|(id, at)| Some((id, at, token.transpose().ok()?)))
+            .filter(|(id, at, token)| {
+                *id > 0 && *at > 0 && token.is_none_or(|n| n > 0) && args.next().is_none()
+            })
             .ok_or_else(|| DELIVERY.into()),
     )
 }
 
 pub(crate) fn deliver_from_args(config: &Config) -> Option<Result<(), String>> {
     parse_helper_args(env::args().skip(1))
-        .map(|args| args.and_then(|(id, at)| deliver_pending(config, id, at)))
+        .map(|args| args.and_then(|(id, at, token)| deliver_pending(config, id, at, token)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{Datelike, TimeZone};
     #[test]
     fn task_runs_only_the_executable_with_numeric_arguments() {
-        let xml = task_xml(42, 1_900_000_000_123, r"C:\A&B\<pet>\app.exe").unwrap();
+        let at = 1_900_000_000_123;
+        let xml = task_xml(
+            42,
+            at,
+            11,
+            r"C:\A&B\<pet>\app.exe",
+            &one_time_trigger(at).unwrap(),
+            false,
+        );
         assert!(xml.contains(r"<Command>C:\A&amp;B\&lt;pet&gt;\app.exe</Command>"));
-        assert!(xml.contains("<Arguments>--deliver-pet-reminder 42 1900000000123</Arguments>"));
+        assert!(xml.contains("<Arguments>--deliver-pet-reminder 42 1900000000123 11</Arguments>"));
         assert!(xml.contains("2030-03-17T17:46:41Z"));
     }
     #[test]
@@ -323,9 +460,134 @@ mod tests {
         assert!(parse("").is_none());
         assert_eq!(
             parse("--deliver-pet-reminder 3 42").unwrap().unwrap(),
-            (3, 42)
+            (3, 42, None)
         );
         assert!(parse("--deliver-pet-reminder 3 bad").unwrap().is_err());
         assert!(parse("--deliver-pet-reminder 3 42 extra").unwrap().is_err());
+    }
+
+    #[test]
+    fn registrations_keep_future_cycles_and_reject_old_helpers_after_edit_or_cancel() {
+        let mut db = Connection::open_in_memory().unwrap();
+        init_delivery_db(&db).unwrap();
+        let start = Local.with_ymd_and_hms(2026, 1, 10, 9, 0, 0).unwrap();
+        let at = start.timestamp_millis();
+        db.execute(
+            "INSERT INTO pending VALUES (1, ?1, 'pet', 'repayment')",
+            [at],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO registrations VALUES (1, 123, ?1, ?2, NULL)",
+            params![
+                r#"{"frequency":"monthly","dayOfMonth":10,"time":"09:00"}"#,
+                start.date_naive().num_days_from_ce()
+            ],
+        )
+        .unwrap();
+        init_delivery_db(&db).unwrap(); // An old first occurrence does not expire a recurring registration.
+        let tx = db.transaction().unwrap();
+        let later = Local.with_ymd_and_hms(2026, 3, 20, 20, 0, 0).unwrap();
+        let claim = |token, clock| claim_delivery(&tx, 1, at, token, clock).unwrap();
+        assert!(claim(None, later).is_none());
+        assert!(claim(Some(123), later).is_some());
+        assert!(claim(Some(123), later).is_none());
+        assert!(claim(
+            Some(123),
+            Local.with_ymd_and_hms(2026, 4, 10, 9, 0, 0).unwrap()
+        )
+        .is_some());
+        tx.execute("UPDATE registrations SET token = 124 WHERE id = 1", [])
+            .unwrap();
+        assert!(claim(Some(123), later).is_none());
+        tx.execute("DELETE FROM pending WHERE id = 1", []).unwrap();
+        assert!(claim(Some(124), later).is_none());
+        // A pre-upgrade one-time task still works with its original numeric arguments.
+        tx.execute("INSERT INTO pending VALUES (1, ?1, 'pet', 'legacy')", [at])
+            .unwrap();
+        assert!(claim(Some(123), later).is_none());
+        assert_eq!(claim(None, later).unwrap().1, "legacy");
+        assert!(claim(None, later).is_none());
+    }
+
+    #[test]
+    #[ignore = "creates and cleans up one temporary Windows Task Scheduler registration"]
+    fn failed_database_commit_restores_the_actual_windows_calendar_task() {
+        let _com = Apartment::enter().unwrap();
+        let folder = task_folder().unwrap();
+        let probe = tempfile::Builder::new()
+            .prefix("SMW-Repeat-QA-")
+            .tempdir()
+            .unwrap();
+        let name = BSTR::from(probe.path().file_name().unwrap().to_str().unwrap());
+        assert!(current_task(&folder, &name).unwrap().is_none());
+        struct Cleanup<'a>(&'a ITaskFolder, &'a BSTR);
+        impl Drop for Cleanup<'_> {
+            fn drop(&mut self) {
+                let _ = set_task(self.0, self.1, None);
+            }
+        }
+        let _cleanup = Cleanup(&folder, &name);
+        let first = Local.with_ymd_and_hms(2099, 4, 10, 9, 0, 0).unwrap();
+        let exe = env::current_exe().unwrap();
+        let at = first.timestamp_millis();
+        let rule_xml = |rule: ReminderRecurrence, token| {
+            let trigger = rule.trigger(at).unwrap().0;
+            BSTR::from(task_xml(
+                1,
+                at,
+                token,
+                exe.to_str().unwrap(),
+                &trigger,
+                true,
+            ))
+        };
+        let daily = rule_xml(
+            ReminderRecurrence::Daily {
+                time: "09:00".into(),
+            },
+            111,
+        );
+        let monthly = rule_xml(
+            ReminderRecurrence::Monthly {
+                time: "09:00".into(),
+                day_of_month: 10,
+            },
+            222,
+        );
+        let weekly = rule_xml(
+            ReminderRecurrence::Weekly {
+                time: "09:00".into(),
+                weekday: first.weekday().number_from_monday() as u8,
+            },
+            333,
+        );
+        let mut db = Connection::open_in_memory().unwrap();
+        init_delivery_db(&db).unwrap();
+        db.execute("CREATE TABLE bad_parent (id INTEGER REFERENCES pending(id) DEFERRABLE INITIALLY DEFERRED)", []).unwrap();
+        let fail_commit = |db: &mut Connection, replacement: Option<&BSTR>| {
+            let tx = db.transaction().unwrap();
+            tx.execute("INSERT INTO bad_parent VALUES(42)", []).unwrap();
+            assert!(commit_schedule(tx, &folder, &name, replacement).is_err());
+        };
+        fail_commit(&mut db, Some(&daily));
+        assert!(current_task(&folder, &name).unwrap().is_none());
+        set_task(&folder, &name, Some(&daily)).unwrap();
+        set_task(&folder, &name, Some(&monthly)).unwrap();
+        set_task(&folder, &name, Some(&weekly)).unwrap();
+        fail_commit(&mut db, Some(&monthly));
+        assert!(current_task(&folder, &name)
+            .unwrap()
+            .unwrap()
+            .to_string()
+            .contains("333</Arguments>"));
+        fail_commit(&mut db, None);
+        assert!(current_task(&folder, &name)
+            .unwrap()
+            .unwrap()
+            .to_string()
+            .contains("333</Arguments>"));
+        set_task(&folder, &name, None).unwrap();
+        assert!(current_task(&folder, &name).unwrap().is_none());
     }
 }
