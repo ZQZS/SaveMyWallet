@@ -11,6 +11,7 @@ import PetChatDetailPicker from '../pets/PetChatDetailPicker.vue'
 import { petChatDetailOptions, selectedPetChatDetails, selectedPetChatOptions } from '../pets/petChatDetails'
 import { useGeneralChat, usePersonaChat, usePetChat } from '../pets/usePetChat'
 import { useReminders } from '../reminders/useReminders'
+import ChatDisclosure from './ChatDisclosure.vue'
 import { useLedgerActionReview } from './useLedgerActionReview'
 
 const props = defineProps<{ dialog?: boolean; pet?: PetCharacter; month: string; totals: MonthlySummary; floor: number }>()
@@ -30,12 +31,19 @@ const root = ref<HTMLElement | null>(null)
 const transcript = ref<HTMLElement | null>(null)
 const input = ref<HTMLTextAreaElement | null>(null)
 const reviewHeading = ref<HTMLElement | null>(null)
+const threadsOpen = ref(false)
+const attachmentsOpen = ref(false)
+const threadDisclosure = ref<InstanceType<typeof ChatDisclosure> | null>(null)
 const threadSelect = ref<HTMLSelectElement | null>(null)
 const deleteButton = ref<HTMLButtonElement | null>(null)
 const keepButton = ref<HTMLButtonElement | null>(null)
 const deleteTarget = ref<{ id: number; title: string } | null>(null)
 const deleting = ref(false)
 const canDelete = computed(() => ready.value && !deleting.value && (conversations.value.length > 1 || !!draft.value || messages.value.length > 0))
+const currentThread = computed(() => conversations.value.find(thread => thread.id === activeConversationId.value))
+const currentThreadTitle = computed(() => ready.value && currentThread.value
+  ? currentThread.value.title || t('pets.chat.untitled', { number: currentThread.value.number })
+  : '')
 const shareMode = ref<'none' | 'summary' | 'details'>('none')
 const detailOptions = computed(() => petChatDetailOptions(props.month, props.totals, true))
 const selectedIds = ref(new Set<string>())
@@ -43,6 +51,17 @@ let initializedSelection = false
 const detailAttachment = computed(() => shareMode.value === 'details'
   ? selectedPetChatDetails(props.month, detailOptions.value, selectedIds.value)
   : undefined)
+const attachmentSummary = computed(() => {
+  if (shareMode.value === 'none') return t('pets.chat.shareNone')
+  const scope = shareMode.value === 'summary' ? t('pets.chat.shareSummary')
+    : t('chat.attachedDetails', { count: detailAttachment.value?.entries.length ?? 0 })
+  return scope + ' · ' + formatMonth(props.month)
+})
+const attachmentHint = computed(() => {
+  if (!detailAttachment.value || detailAttachment.value.entries.length) return ''
+  if (detailOptions.value.length) return t('pets.chat.chooseDetails')
+  return attachmentsOpen.value ? '' : t('pets.chat.noDetails')
+})
 const configured = ref<boolean | null>(null)
 const keyError = ref('')
 const tooLong = computed(() => Array.from(draft.value.trim()).length > maxMessageLength)
@@ -119,15 +138,18 @@ function startChat() {
 }
 
 function requestDeletion() {
-  const thread = conversations.value.find(item => item.id === activeConversationId.value)
+  const thread = currentThread.value
   if (!thread || !canDelete.value) return
-  deleteTarget.value = { id: thread.id, title: thread.title || t('pets.chat.untitled', { number: thread.number }) }
+  deleteTarget.value = { id: thread.id, title: currentThreadTitle.value }
   void nextTick(() => keepButton.value?.focus({ preventScroll: true }))
 }
 
 function keepChat() {
   deleteTarget.value = null
-  void nextTick(() => deleteButton.value?.focus({ preventScroll: true }))
+  void nextTick(() => {
+    if (threadsOpen.value) deleteButton.value?.focus({ preventScroll: true })
+    else threadDisclosure.value?.focus()
+  })
 }
 
 async function confirmDeletion() {
@@ -139,8 +161,9 @@ async function confirmDeletion() {
   } finally {
     deleting.value = false
     await nextTick()
-    const focusTarget = keepButton.value ?? threadSelect.value
-    focusTarget?.focus({ preventScroll: true })
+    if (keepButton.value) keepButton.value.focus({ preventScroll: true })
+    else if (threadsOpen.value) threadSelect.value?.focus({ preventScroll: true })
+    else threadDisclosure.value?.focus()
   }
 }
 
@@ -161,7 +184,7 @@ onBeforeUnmount(() => {
 
 <template>
   <component :is="dialog ? 'dialog' : 'section'" ref="root" class="chat-window" :class="{ 'pet-dialog': dialog, 'chat-page': !dialog }"
-    aria-labelledby="chat-title" :aria-describedby="review || deleteTarget ? undefined : 'chat-disclosure'"
+    aria-labelledby="chat-title" :aria-describedby="attachmentsOpen && !review && !deleteTarget ? 'chat-disclosure' : undefined"
     @cancel="stop" @close="emit('close')">
     <header class="chat-heading">
       <span class="chat-avatar" aria-hidden="true">
@@ -175,23 +198,25 @@ onBeforeUnmount(() => {
       </button>
       <slot v-else name="controls" />
     </header>
-    <nav class="thread-bar" :aria-label="t('pets.chat.chooseThread')">
-      <label>
-        <span>{{ t('pets.chat.chooseThread') }}</span>
-        <select ref="threadSelect" name="chatThread" :value="activeConversationId" :disabled="!ready || deleting"
-          @change="selectChat(Number(($event.currentTarget as HTMLSelectElement).value))">
-          <option v-for="thread in conversations" :key="thread.id" :value="thread.id">
-            {{ thread.title || t('pets.chat.untitled', { number: thread.number }) }}
-          </option>
-        </select>
-      </label>
-      <button type="button" name="newChat" class="new-thread" :disabled="!ready || deleting" @click="startChat">
-        <MessageSquarePlus :size="16" aria-hidden="true" />{{ t('pets.chat.newThread') }}
-      </button>
-      <button ref="deleteButton" type="button" name="deleteChat" class="delete-thread" :disabled="!canDelete || !!deleteTarget"
-        :aria-label="t('pets.chat.deleteThread')" :title="t('pets.chat.deleteThread')" @click="requestDeletion">
-        <Trash2 :size="17" aria-hidden="true" />
-      </button>
+    <nav class="chat-threads" :aria-label="t('pets.chat.chooseThread')">
+      <ChatDisclosure ref="threadDisclosure" v-model:open="threadsOpen" name="chatThreads"
+        :label="t('pets.chat.chooseThread')" :value="currentThreadTitle">
+        <div class="thread-bar">
+          <select ref="threadSelect" name="chatThread" :aria-label="t('pets.chat.chooseThread')" :value="activeConversationId"
+            :disabled="!ready || deleting" @change="selectChat(Number(($event.currentTarget as HTMLSelectElement).value))">
+            <option v-for="thread in conversations" :key="thread.id" :value="thread.id">
+              {{ thread.title || t('pets.chat.untitled', { number: thread.number }) }}
+            </option>
+          </select>
+          <button type="button" name="newChat" class="new-thread" :disabled="!ready || deleting" @click="startChat">
+            <MessageSquarePlus :size="16" aria-hidden="true" />{{ t('pets.chat.newThread') }}
+          </button>
+          <button ref="deleteButton" type="button" name="deleteChat" class="delete-thread" :disabled="!canDelete || !!deleteTarget"
+            :aria-label="t('pets.chat.deleteThread')" :title="t('pets.chat.deleteThread')" @click="requestDeletion">
+            <Trash2 :size="17" aria-hidden="true" />
+          </button>
+        </div>
+      </ChatDisclosure>
     </nav>
 
     <div v-if="storageError" class="storage-status chat-error" role="alert">
@@ -233,22 +258,26 @@ onBeforeUnmount(() => {
       </div>
     </section>
     <form v-else-if="!deleteTarget" class="chat-compose" @submit.prevent="submit">
-      <p id="chat-disclosure" class="disclosure">{{ t(pet ? 'pets.chat.disclosure' : 'chat.disclosure') }}</p>
-      <button v-if="session.needsReload.value" type="button" class="text-action" :disabled="session.busy.value" @click="session.retryRead">{{ t('app.retry') }}</button>
-      <fieldset class="share-options" :disabled="pending || !ready">
-        <legend>{{ t('pets.chat.share', { month: formatMonth(month) }) }}</legend>
-        <div class="share-choices">
-          <label v-for="mode in (['none', 'summary', 'details'] as const)" :key="mode">
-            <input v-model="shareMode" type="radio" name="chat-sharing" :value="mode" />
-            <span>{{ t(mode === 'details' ? 'pets.chat.shareDetails' : mode === 'summary' ? 'pets.chat.shareSummary' : 'pets.chat.shareNone') }}</span>
-          </label>
+      <ChatDisclosure v-model:open="attachmentsOpen" name="chatAttachments" :label="t('chat.attachments')" :value="attachmentSummary">
+        <div class="attachment-options">
+          <p id="chat-disclosure" class="disclosure">{{ t(pet ? 'pets.chat.disclosure' : 'chat.disclosure') }}</p>
+          <fieldset class="share-options" :disabled="pending || !ready">
+            <legend>{{ t('pets.chat.share', { month: formatMonth(month) }) }}</legend>
+            <div class="share-choices">
+              <label v-for="mode in (['none', 'summary', 'details'] as const)" :key="mode">
+                <input v-model="shareMode" type="radio" name="chat-sharing" :value="mode" />
+                <span>{{ t(mode === 'details' ? 'pets.chat.shareDetails' : mode === 'summary' ? 'pets.chat.shareSummary' : 'pets.chat.shareNone') }}</span>
+              </label>
+            </div>
+          </fieldset>
+          <p v-if="shareMode !== 'none'" class="shared-facts">
+            {{ t('pets.chat.figures', { balance: formatMoney(totals.balance), due: formatMoney(totals.due), floor: formatMoney(floor) }) }}
+          </p>
+          <PetChatDetailPicker v-if="shareMode === 'details'" v-model="selectedIds" :options="detailOptions" :disabled="pending" />
         </div>
-      </fieldset>
-      <p v-if="shareMode !== 'none'" class="shared-facts">
-        {{ t('pets.chat.figures', { balance: formatMoney(totals.balance), due: formatMoney(totals.due), floor: formatMoney(floor) }) }}
-      </p>
-      <PetChatDetailPicker v-if="shareMode === 'details'" v-model="selectedIds" :options="detailOptions" :disabled="pending" />
-      <p v-if="shareMode === 'details' && detailOptions.length && !detailAttachment?.entries.length" class="disclosure">{{ t('pets.chat.chooseDetails') }}</p>
+      </ChatDisclosure>
+      <p v-if="attachmentHint" id="chat-attachment-hint" class="disclosure">{{ attachmentHint }}</p>
+      <button v-if="session.needsReload.value" type="button" class="text-action" :disabled="session.busy.value" @click="session.retryRead">{{ t('app.retry') }}</button>
       <div v-if="keyError" class="chat-error" role="alert">
         {{ keyError }}
         <button type="button" class="text-action" @click="checkKey">{{ t('pets.chat.checkAgain') }}</button>
@@ -265,7 +294,7 @@ onBeforeUnmount(() => {
       <p v-if="tooLong" class="chat-error" role="alert">{{ t('pets.chat.limit', { count: maxMessageLength }) }}</p>
       <div class="compose-row">
         <textarea ref="input" v-model="draft" rows="2" enterkeyhint="send" :maxlength="maxMessageLength * 2"
-          :readonly="pending || !ready" :aria-invalid="tooLong" :aria-label="t('pets.chat.message')"
+          :readonly="pending || !ready" :aria-invalid="tooLong" :aria-label="t('pets.chat.message')" :aria-describedby="attachmentHint ? 'chat-attachment-hint' : undefined"
           :placeholder="shareMode === 'details' ? t('pets.chat.detailsPlaceholder') : t('pets.chat.placeholder', { name: speaker })"
           @keydown.enter="handleEnter" />
         <button v-if="pending" type="button" class="stop-button" @click="stop">
@@ -294,9 +323,8 @@ onBeforeUnmount(() => {
 .empty-chat { margin: 1rem auto; max-width: 28em; text-align: center; color: var(--sub); font-size: .9rem; line-height: 1.6; }
 .chat-close { flex: none; display: grid; place-items: center; width: 44px; height: 44px; border: 0; border-radius: 10px; background: transparent; color: inherit; }
 .chat-close:hover { box-shadow: inset 0 0 0 1px currentColor; }
-.thread-bar { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 14px; border-bottom: 1px solid var(--line); }
-.thread-bar label { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
-.thread-bar label span { flex: none; color: var(--sub); font-size: .78rem; }
+.chat-threads { flex: none; min-width: 0; padding-inline: 14px; border-bottom: 1px solid var(--line); }
+.thread-bar { display: flex; align-items: center; gap: 8px; padding-bottom: 6px; }
 .thread-bar select { flex: 1; width: 100%; min-width: 0; min-height: 34px; padding: 3px 5px; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; text-overflow: ellipsis; font-size: .86rem; }
 .new-thread { display: inline-flex; align-items: center; gap: 5px; min-height: 36px; padding: 3px 6px; white-space: nowrap; background: transparent; color: var(--green); border: 0; border-radius: 6px; font-size: .84rem; font-weight: 650; }
 .new-thread:hover { background: var(--soft); }
@@ -316,7 +344,9 @@ onBeforeUnmount(() => {
 .from-user { margin-inline-start: auto; }
 .from-user strong { text-align: end; }
 .from-user p { background: var(--hero-bg); color: var(--hero-ink); border-radius: 12px 3px 12px 12px; }
-.chat-compose { flex: none; display: grid; gap: 6px; padding: 12px 14px; border-top: 1px solid var(--line); }
+.chat-compose { flex: none; display: grid; gap: 4px; padding: 2px 14px 10px; border-top: 1px solid var(--line); }
+.attachment-options { display: grid; gap: 6px; min-width: 0; max-height: min(36dvh, 18rem); overflow: auto; padding: 3px 4px 6px; }
+.attachment-options :deep(.bill-list) { max-height: none; overflow: visible; }
 .action-review { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 8px; max-height: 68%; padding: 12px 14px; border-top: 1px solid var(--line); background: var(--surface); }
 .action-review h3 { font-size: 1rem; overflow-wrap: anywhere; }
 .action-review ul { margin: 0; min-height: 0; padding-inline-start: 1.25rem; overflow: auto; overflow-wrap: anywhere; line-height: 1.5; font-size: .9rem; }
@@ -343,9 +373,8 @@ onBeforeUnmount(() => {
 @media (pointer: coarse) { .share-choices label, .thread-bar select, .thread-bar button { min-height: 44px; } .delete-thread { width: 44px; } }
 @media (max-width: 440px) {
   .pet-dialog { width: calc(100% - 12px); height: min(44rem, calc(100% - 12px)); max-height: calc(100dvh - 12px); }
-  .chat-compose, .chat-heading, .thread-bar { padding-inline: 10px; }
+  .chat-compose, .chat-heading, .chat-threads { padding-inline: 10px; }
   .thread-bar { gap: 4px; }
-  .thread-bar label { display: grid; gap: 2px; padding: 2px 0; }
 }
 @media (max-width: 860px) {
   .chat-page { height: max(27rem, calc(100dvh - 9.5rem - env(safe-area-inset-top) - env(safe-area-inset-bottom))); }

@@ -2,8 +2,9 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { useLedgerSession } from '../../app/ledgerSession'
 import { isMonth, MAX_MONTH, MIN_MONTH } from '../../domain/ledger'
-import { t } from '../../i18n'
+import { formatMonth, t } from '../../i18n'
 import { usePets } from '../pets/usePets'
+import ChatDisclosure from './ChatDisclosure.vue'
 import ChatWindow from './ChatWindow.vue'
 
 const session = useLedgerSession()
@@ -11,6 +12,7 @@ const { data, month, busy, selectMonth, calculateMonth } = session
 const totals = computed(() => data.value && calculateMonth(data.value, month.value))
 const monthPicker = ref<HTMLInputElement | null>(null)
 const personaPicker = ref<HTMLSelectElement | null>(null)
+const contextOpen = ref(false)
 const { characters, ready, storageError } = usePets()
 const preferenceKey = 'savemywallet.chat.persona'
 const monthKey = 'savemywallet.chat.month'
@@ -67,34 +69,43 @@ function changeMonth(event: Event) {
 <template>
   <p v-if="waitingForPersona" class="loading" role="status">{{ t('pets.picker.loading') }}</p>
   <p v-if="storageError" class="alert" role="status">{{ t('pets.picker.storageUnavailable') }}</p>
-  <ChatWindow v-if="data && totals && !waitingForPersona" :key="JSON.stringify([month, persona?.id])"
+  <ChatWindow v-if="data && totals && !waitingForPersona" :key="JSON.stringify([month, persona?.id])" class="menu-chat"
     :pet="persona" :month="month" :totals="totals" :floor="data.settings.warningFloorCents">
     <template #controls>
-      <div class="chat-context">
-        <label class="chat-persona">
-          {{ t('chat.persona') }}
-          <select ref="personaPicker" name="chatPersona" :value="persona?.id ?? ''" @change="changePersona">
-            <option value="">{{ t('chat.noPersona') }}</option>
-            <option v-for="character in characters" :key="character.id" :value="character.id">{{ character.name }}</option>
-          </select>
-        </label>
-        <label class="chat-month">
-          {{ t('chat.month') }}
-          <input ref="monthPicker" type="month" :value="month" :min="MIN_MONTH" :max="MAX_MONTH" :disabled="busy" @change="changeMonth" />
-        </label>
-      </div>
+      <ChatDisclosure v-model:open="contextOpen" name="chatContext" class="context-disclosure"
+        :label="t('chat.contextControls')" :value="formatMonth(month) + ' · ' + (persona?.name ?? t('chat.title'))">
+        <div class="chat-context">
+          <label class="chat-persona">
+            {{ t('chat.persona') }}
+            <select ref="personaPicker" name="chatPersona" :value="persona?.id ?? ''" @change="changePersona">
+              <option value="">{{ t('chat.noPersona') }}</option>
+              <option v-for="character in characters" :key="character.id" :value="character.id">{{ character.name }}</option>
+            </select>
+          </label>
+          <label class="chat-month">
+            {{ t('chat.month') }}
+            <input ref="monthPicker" type="month" :value="month" :min="MIN_MONTH" :max="MAX_MONTH" :disabled="busy" @change="changeMonth" />
+          </label>
+        </div>
+      </ChatDisclosure>
     </template>
   </ChatWindow>
 </template>
 
 <style scoped>
-.chat-context { display: flex; align-items: end; gap: 6px 12px; max-width: 100%; }
+.context-disclosure { flex: 0 1 23rem; min-width: 0; max-width: 100%; }
+.chat-context { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, auto); align-items: end; gap: 6px 12px; padding-block: 2px 6px; }
 .chat-context label { min-width: 0; display: grid; gap: 3px; font-size: .8rem; }
-.chat-persona select { width: clamp(10rem, 18vw, 15rem); text-overflow: ellipsis; }
+.chat-persona select { width: 100%; text-overflow: ellipsis; }
 .chat-context :is(input, select) { min-width: 0; max-width: 100%; min-height: 36px; padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); font: inherit; }
 @media (pointer: coarse) { .chat-context :is(input, select) { min-height: 44px; } }
 @media (max-width: 600px) {
-  .chat-context { flex: 1 1 100%; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, auto); }
-  .chat-persona select { width: 100%; }
+  /* The current chat and month share a title row on small screens. Keep the page heading available to assistive technology. */
+  .menu-chat :deep(.chat-heading) { flex-wrap: nowrap; align-items: flex-start; }
+  .menu-chat :deep(.chat-heading h1) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .context-disclosure { flex: 1; }
+  .context-disclosure :deep(summary) { display: grid; grid-template-columns: minmax(0, 1fr) auto; row-gap: 0; min-height: 44px; }
+  .context-disclosure :deep(.panel-value) { grid-area: 2 / 1; margin: 0; }
+  .context-disclosure :deep(.panel-chevron) { grid-area: 1 / 2 / span 2; }
 }
 </style>
