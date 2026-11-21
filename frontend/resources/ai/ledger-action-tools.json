@@ -108,6 +108,20 @@
     }
   },
   {
+    "name": "manage_reminder",
+    "description": "Enable, disable, or permanently delete one existing scheduled reminder when explicitly asked. Use the exact subject or task number (#12) supplied in the current user message. For 'turn off' or 'stop reminding me', disable it. Only delete on an explicit request to remove it. The device matches locally and shows the task for review.",
+    "requiresSelection": false,
+    "parameters": {
+      "type": "object", "additionalProperties": false, "required": ["operation"],
+      "oneOf": [{ "required": ["taskId"] }, { "required": ["subject"] }],
+      "properties": {
+        "operation": { "type": "string", "enum": ["enable", "disable", "delete"] },
+        "taskId": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "subject": { "type": "string", "minLength": 1, "maxLength": 300 }
+      }
+    }
+  },
+  {
     "name": "show_pet_popup",
     "description": "Show a pet pop-up inside the app now. Only include a subject if supplied by the user.",
     "requiresSelection": false,

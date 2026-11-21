@@ -23,8 +23,10 @@ function setup() {
       records.set(id, item)
       return { ...item }
     },
-    async remove(id, from) {
-      return records.get(id)?.status === from && records.delete(id)
+    async remove(id, from, expectedRevision) {
+      const task = records.get(id)
+      return task?.status === from && (expectedRevision === undefined || (task.revision ?? 0) === expectedRevision)
+        && records.delete(id)
     },
   }
   const services = {
@@ -81,7 +83,6 @@ test('immediate popups, cancellations, deletion and invalid time/text stay consi
   const now = await service.create({ channel: 'popup', text: '一起伸个懒腰' })
   assert.equal(service.activePopup.value.id, now.id)
   const later = await service.create({ channel: 'popup', text: '等一会', at: state.time + 900 })
-  await assert.rejects(service.remove(later.id), /REMINDER_STATE/)
   await service.cancel(later.id)
   state.time += 1000
   await service.dismissPopup()
@@ -193,7 +194,7 @@ test('deleting an elapsed notification clears its OS schedule first and remains 
   await service.refresh()
   state.cancelFails = true
   await assert.rejects(service.remove(future.id), /REMINDER_DELIVERY/)
-  assert.equal(service.tasks.value[0].status, 'completed')
+  assert.equal(service.tasks.value[0].status, 'deleting')
   state.cancelFails = false
   await service.remove(future.id)
   assert.equal(service.tasks.value.length, 0)
@@ -423,4 +424,154 @@ test('adjacent overnight windows that land on the same date are each delivered o
   assert.equal(service.tasks.value[0].lastLocalDay, '2026-11-25')
   await service.cancel(task.id)
   assert.deepEqual(calls.at(-1), ['cancel', task.id])
+})
+
+test('disabled alarms survive restarts and skip every occurrence missed while off', async () => {
+  for (const rule of [daily, { frequency: 'weekly', weekday: 2, time: '22:30' }, monthly,
+    createIntervalRecurrence(30, local(2026, 11, 22)), createRandomWindowRecurrence('23:00', '01:00', 37)]) {
+    const { service, state, calls, restart } = setup()
+    const task = await service.create({ channel: 'notification', text: '休息', recurrence: rule })
+    await service.setEnabled(task.id, false, 0)
+    assert.equal(service.tasks.value[0].status, 'disabled')
+    assert.deepEqual(calls.at(-1), ['cancel', task.id])
+    calls.length = 0
+    state.time += 51 * 86400_000
+    const reopened = restart()
+    await reopened.refresh()
+    assert.equal(reopened.tasks.value[0].status, 'disabled')
+    assert.deepEqual(calls, [])
+    await reopened.edit(task.id, { channel: 'notification', text: '喝水', recurrence: rule }, 1)
+    assert.equal(reopened.tasks.value[0].status, 'disabled')
+    assert.deepEqual(calls.map(call => call[0]), ['wording'])
+    const next = nextReminderOccurrence(rule, state.time)
+    await reopened.setEnabled(task.id, true, 2)
+    assert.deepEqual(calls.at(-1), ['schedule', task.id, next, '猫', '喝水', true, rule])
+    assert.deepEqual(reopened.tasks.value.map(t => [t.id, t.status, t.at]), [[task.id, 'scheduled', next]])
+    await assert.rejects(reopened.remove(task.id, 2), /REMINDER_STATE/)
+    await reopened.remove(task.id, 3)
+    assert.deepEqual(calls.at(-1), ['cancel', task.id])
+    assert.deepEqual(reopened.tasks.value, [])
+  }
+})
+
+test('an expired disabled one-shot can be edited without arming; a new future time can be saved and enabled together', async () => {
+  const { service, state, calls } = setup()
+  const at = state.time + 1200
+  const task = await service.create({ channel: 'popup', text: '吃饭', at })
+  await service.setEnabled(task.id, false)
+  state.time = at + 1
+  await assert.rejects(service.setEnabled(task.id, true), /REMINDER_EXPIRED/)
+  await service.edit(task.id, { channel: 'notification', text: '午饭', at }, 1)
+  assert.equal(service.tasks.value[0].status, 'disabled')
+  assert.equal(service.activePopup.value, null)
+  assert.deepEqual(calls.map(call => call[0]), ['wording', 'wording'])
+  state.denied = true
+  const later = at + 60_000
+  await assert.rejects(service.edit(task.id, { channel: 'notification', text: '午饭', at: later }, 2, true), /REMINDER_PERMISSION/)
+  assert.equal(service.tasks.value[0].at, later)
+  assert.equal(service.tasks.value[0].status, 'disabled')
+  state.denied = false
+  await service.setEnabled(task.id, true, 3)
+  assert.deepEqual(calls.at(-1), ['schedule', task.id, later, '猫', '午饭', true])
+  await assert.rejects(service.edit(task.id, { channel: 'popup', text: '', at: later }, 3), /REMINDER_STATE/)
+})
+
+test('an open alarm closes when paused or deleted from another window; test popups are independent', async () => {
+  const { service, state, restart, records } = setup()
+  const other = restart()
+  const rule = createIntervalRecurrence(10, state.time)
+  const task = await service.create({ channel: 'popup', text: '起身', recurrence: rule })
+  state.time = task.at
+  await service.refresh()
+  assert.equal(service.activePopup.value.id, task.id)
+  await other.setEnabled(task.id, false)
+  await service.refresh()
+  assert.equal(service.activePopup.value, null)
+  await other.setEnabled(task.id, true)
+  state.time += 600_000
+  await service.refresh()
+  assert.equal(service.activePopup.value.id, task.id)
+  await service.test({ channel: 'popup', text: '试发' })
+  await other.remove(task.id)
+  await service.refresh()
+  assert.equal(service.activePopup.value.message, '试发')
+  assert.equal(records.size, 0)
+})
+
+test('restart completes interrupted native enable, disable and deletion by the original alarm ID', async () => {
+  const { service, state, records, calls, store, restart } = setup()
+  const task = await service.create({ channel: 'notification', text: '早安', recurrence: daily })
+  calls.length = 0
+  const transition = store.transition
+  let breakAt = 'disabled'
+  store.transition = async (...args) => {
+    if (args[2] === breakAt) { breakAt = ''; throw new Error('REMINDER_STORAGE') }
+    return transition(...args)
+  }
+  await assert.rejects(service.setEnabled(task.id, false), /REMINDER_STORAGE/)
+  assert.equal(records.get(task.id).status, 'disabling')
+  state.cancelFails = true
+  await restart().refresh()
+  assert.equal(records.get(task.id).status, 'disabling')
+  assert.equal(records.get(task.id).error, 'REMINDER_DELIVERY')
+  state.cancelFails = false
+  const reopened = restart()
+  await reopened.refresh()
+  assert.equal(records.get(task.id).status, 'disabled')
+  breakAt = 'scheduled'
+  await assert.rejects(reopened.setEnabled(task.id, true), /REMINDER_STORAGE/)
+  assert.equal(records.get(task.id).status, 'enabling')
+  state.time += 8 * 86400_000
+  const resumed = restart()
+  await resumed.refresh()
+  assert.equal(records.get(task.id).status, 'scheduled')
+  assert.deepEqual(calls.at(-1), ['schedule', task.id, nextReminderOccurrence(daily, state.time), '猫', '早安', false, daily])
+  state.cancelFails = true
+  await assert.rejects(resumed.remove(task.id), /REMINDER_DELIVERY/)
+  assert.equal(records.get(task.id).status, 'deleting')
+  state.cancelFails = false
+  await restart().refresh()
+  assert.equal(records.size, 0)
+  assert.deepEqual(calls.at(-1), ['cancel', task.id])
+})
+
+test('legacy cancelled and completed scheduled reminders can be edited and enabled; immediate messages stay history', async () => {
+  const { service, state, records } = setup()
+  const task = await service.create({ channel: 'popup', text: '还款', recurrence: monthly })
+  await service.cancel(task.id)
+  assert.equal(records.get(task.id).status, 'cancelled')
+  await service.setEnabled(task.id, true)
+  assert.equal(records.get(task.id).status, 'scheduled')
+  const once = await service.create({ channel: 'popup', text: '一次', at: state.time + 1 })
+  state.time++
+  await service.refresh()
+  assert.equal(records.get(once.id).status, 'completed')
+  await assert.rejects(service.setEnabled(once.id, true), /REMINDER_EXPIRED/)
+  await service.edit(once.id, { channel: 'popup', text: '一次', at: state.time + 60_000 }, 0, true)
+  assert.equal(records.get(once.id).status, 'scheduled')
+  assert.equal(service.activePopup.value, null)
+  const immediate = await service.create({ channel: 'popup', text: '即时' })
+  await assert.rejects(service.setEnabled(immediate.id, true), /REMINDER_STATE/)
+  await service.remove(immediate.id)
+  assert.equal(service.activePopup.value, null)
+})
+
+test('an interrupted one-shot activation is disarmed after expiry, even if cleanup needs a retry', async () => {
+  const { service, records, state, restart, calls } = setup()
+  const at = state.time + 60_000
+  const once = await service.create({ channel: 'notification', text: '单次', at })
+  const other = await service.create({ channel: 'popup', text: '另一条', at })
+  records.set(once.id, { ...once, status: 'enabling', revision: 2 })
+  calls.length = 0
+  state.time = at
+  state.cancelFails = true
+  const reopened = restart()
+  await reopened.refresh()
+  assert.equal(reopened.activePopup.value.id, other.id)
+  assert.equal(records.get(once.id).status, 'disabling')
+  await assert.rejects(reopened.setEnabled(once.id, false), /REMINDER_DELIVERY/)
+  state.cancelFails = false
+  await reopened.refresh()
+  assert.equal(records.get(once.id).status, 'disabled')
+  assert.deepEqual(calls.map(call => call[0]), ['cancel', 'cancel', 'cancel'])
 })

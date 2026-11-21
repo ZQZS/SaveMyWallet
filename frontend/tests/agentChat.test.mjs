@@ -7,6 +7,7 @@ import { summarize } from '../src/domain/ledger.ts'
 import { useLedgerActionReview } from '../src/features/ai/useLedgerActionReview.ts'
 import { nextReminderOccurrence } from '../src/features/reminders/recurrence.ts'
 import { createReminderService } from '../src/features/reminders/reminderService.ts'
+import { prepareReminderManagement } from '../src/features/reminders/reminderManagement.ts'
 
 globalThis.window = {}
 afterEach(clearMocks)
@@ -91,6 +92,23 @@ test('pet mode carries its persona and chat without shared bills cannot execute 
   assert.equal(await run({ ...general, mode: 'pet', character }), '你好！')
   mockIPC(() => ({ text: '', calls: [toolCall] }))
   await assert.rejects(run(general), /AI_BAD_RESPONSE/)
+})
+
+test('menu persona keeps the role on every Pi turn; only checked rows are available to the ledger tool', async () => {
+  const character = { name: '旅行作家', description: '喜欢细节', voiceSample: '一起上路吧', scenario: '在港口启程' }
+  const details = { month: '2026-11', entries: [bill('选中的账单', 900)] }
+  const reply = '长文'.repeat(3000)
+  const input = { ...general, mode: 'persona', character, messages: [{ role: 'user', content: '写一个旅行故事'.repeat(200) }],
+    facts: { month: details.month, balanceCents: 100, dueCents: 900, warningFloorCents: 0 }, details }
+  mockIPC((_command, payload) => {
+    assert.equal(payload.mode, 'persona')
+    assert.deepEqual(payload.character, character)
+    assert.equal(payload.messages[0].content, input.messages[0].content)
+    if (!payload.toolRounds.length) return { text: '', calls: [toolCall] }
+    assert.equal(JSON.parse(payload.toolRounds[0].results[0].content).dueCents, 900)
+    return { text: reply, calls: [] }
+  })
+  assert.equal(await run(input), reply)
 })
 
 test('cancel interrupts the active native turn and native errors keep their public code', async () => {
@@ -181,7 +199,7 @@ test('a malformed sibling call never partially applies its batch; an intentional
   assert.equal(reviewed, 1)
 })
 
-test('both chat modes expose all pet reminders without ledger sharing and finish with local receipts', async () => {
+test('all chat modes expose pet reminders without ledger sharing and finish with local receipts', async () => {
   const cases = [
     ['show_pet_popup', {}],
     ['send_pet_notification', { text: '带钥匙' }],
@@ -193,7 +211,8 @@ test('both chat modes expose all pet reminders without ledger sharing and finish
     ['schedule_pet_popup', { text: '喝水', recurrence: { frequency: 'interval', minutes: 44640 } }],
     ['schedule_pet_notification', { text: '吃饭', recurrence: { frequency: 'randomWindow', startTime: '11:30', endTime: '13:00' } }],
   ]
-  for (const input of [general, { ...general, mode: 'pet', character: { name: 'Fox', description: '', voiceSample: '' } }]) {
+  const character = { name: 'Fox', description: '', voiceSample: '' }
+  for (const input of [general, { ...general, mode: 'pet', character }, { ...general, mode: 'persona', character }]) {
     let requests = 0
     mockIPC((_command, payload) => {
       requests++
@@ -317,4 +336,86 @@ test('an approved Pi reminder test uses the transient channel once and never add
   assert.equal(reminders.activePopup.value.message, '吃饭')
   assert.deepEqual(reminders.tasks.value, [])
   assert.match(answer, /测试桌宠弹窗.*\n.*测试通知/)
+})
+
+function alarm(id, text) {
+  return { id, text, message: text, channel: 'notification', petName: '私有角色', status: 'scheduled',
+    scheduled: true, revision: 2, at: new Date(2030, 5, 11, 9).getTime(), recurrence: { frequency: 'daily', time: '09:00' } }
+}
+
+test('Pi manages only the named alarm after local approval and retries each change once', async () => {
+  let rows = [alarm(12, '喝水'), alarm(13, '不能透露的任务')]
+  const writes = []
+  const management = {
+    list: async () => structuredClone(rows),
+    async setEnabled(id, enabled, revision) {
+      const row = rows.find(item => item.id === id)
+      assert.equal(row.revision, revision)
+      row.status = enabled ? 'scheduled' : 'disabled'
+      row.revision++
+      writes.push([id, enabled, revision])
+    },
+    async remove(id, revision) {
+      assert.equal(rows.find(item => item.id === id).revision, revision)
+      rows = rows.filter(item => item.id !== id)
+      writes.push([id, 'delete', revision])
+    },
+  }
+  const ledger = createLedgerSession({ calculateMonth: summarize, repository: {} })
+  const review = useLedgerActionReview(ledger, undefined, undefined, management)
+  for (const [mode, operation, question, target] of [
+    ['pet', 'disable', '关闭喝水提醒', { subject: '喝水' }],
+    ['general', 'enable', '开启提醒 #12', { taskId: 12 }],
+    ['persona', 'delete', '删除喝水提醒', { subject: '喝水' }],
+  ]) {
+    const args = { operation, ...target }
+    let cards = 0, providerTurns = 0
+    mockIPC((_command, payload) => {
+      providerTurns++
+      assert.doesNotMatch(JSON.stringify(payload), /不能透露的任务|私有角色/)
+      return { text: '', calls: ['first', 'retry'].map(id => ({ id, name: 'manage_reminder', arguments: args })) }
+    })
+    const input = { ...general, mode, messages: [{ role: 'user', content: question }] }
+    if (mode !== 'general') input.character = { name: '旅人', description: '健谈', voiceSample: '启程' }
+    const run = review.forTurn('2030-06', [], question)
+    const response = await chatWithAgent(input, new AbortController().signal, async (name, args, signal) => {
+      const pending = run(name, args, signal)
+      await new Promise(resolve => setImmediate(resolve))
+      assert.match(review.review.value.lines.join(' '), /#12.*喝水.*通知.*私有角色.*09:00/)
+      cards++
+      review.confirm()
+      return pending
+    })
+    assert.equal(providerTurns, 1)
+    assert.equal(cards, 1)
+    assert.doesNotMatch(response, /不能透露的任务|私有角色/)
+  }
+  assert.deepEqual(writes, [[12, false, 2], [12, true, 3], [12, 'delete', 4]])
+  assert.deepEqual(rows.map(row => row.id), [13])
+})
+
+test('local reminder lookup rejects hallucinated IDs, ambiguous subjects and changes made while awaiting approval', async () => {
+  let rows = [alarm(12, '午饭')]
+  const management = {
+    list: async () => structuredClone(rows),
+    setEnabled: assert.fail, remove: assert.fail,
+  }
+  const prepare = (selector, question, operation = 'disable') =>
+    prepareReminderManagement({ operation, ...selector }, question, management)
+  await assert.rejects(prepare({ taskId: 12 }, '请关闭12点的提醒'), /REMINDER_TARGET_REQUIRED/)
+  await assert.rejects(prepare({ taskId: 12 }, '请删除 #123'), /REMINDER_TARGET_REQUIRED/)
+  await assert.rejects(prepare({ subject: '睡觉' }, '请关闭午饭提醒'), /REMINDER_TARGET_REQUIRED/)
+  await assert.rejects(prepare({ subject: '午饭' }, '请关闭午饭提醒', ['disable']), /AI_INVALID_INPUT/)
+  assert.equal((await prepare({ taskId: 12 }, '开启编号１２', 'enable')).unchanged, true)
+  const pending = await prepare({ subject: '午饭' }, '请关闭午饭提醒')
+  rows[0].revision++
+  await assert.rejects(pending.apply(new AbortController().signal), /REMINDER_STATE/)
+  rows.push(alarm(13, '午饭'))
+  await assert.rejects(prepare({ subject: '午饭' }, '删除午饭提醒'), /REMINDER_TARGET_AMBIGUOUS/)
+  rows[1].text = '午饭后散步'
+  await assert.rejects(prepare({ subject: '午饭' }, '关闭午饭后散步提醒'), /REMINDER_TARGET_AMBIGUOUS/)
+  rows[0].scheduled = false
+  await assert.rejects(prepare({ taskId: 12 }, '关闭 #12'), /REMINDER_TARGET_MISSING/)
+  Object.assign(rows[1], { status: 'disabled', at: 1, recurrence: undefined })
+  await assert.rejects(prepare({ taskId: 13 }, '开启 #13', 'enable'), /REMINDER_EXPIRED/)
 })

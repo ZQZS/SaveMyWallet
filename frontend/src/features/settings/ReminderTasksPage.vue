@@ -10,13 +10,16 @@ import { useReminders } from '../reminders/useReminders'
 import type { ReminderTask } from '../reminders/reminderService'
 import SettingsPageFrame from './SettingsPageFrame.vue'
 
-const { tasks, ready, error, create, edit, cancel, remove, refresh, test } = useReminders()
+const { tasks, ready, error, create, edit, setEnabled, remove, refresh, test } = useReminders()
 const { activePet, characters } = usePets()
 const formOpen = ref(false)
 const original = shallowRef<ReminderTask | null>(null)
+const enableOnSave = ref(false)
+const deleteTarget = shallowRef<ReminderTask | null>(null)
 let editButton: HTMLButtonElement | null = null
 const addButton = ref<HTMLButtonElement | null>(null)
 const subjectInput = ref<HTMLTextAreaElement | null>(null)
+const timeInput = ref<HTMLInputElement | null>(null)
 const subject = ref('')
 const channel = ref<'popup' | 'notification'>('popup')
 const timing = ref<'now' | 'later'>('now')
@@ -51,18 +54,36 @@ const savedPet = computed(() => characters.value.find(pet => pet.id === original
 const subjectChanged = computed(() => !!original.value && original.value.text !== subject.value.trim())
 const petName = computed(() => original.value && !subjectChanged.value ? original.value.petName
   : (savedPet.value ?? activePet.value).name)
-function isPending(task: ReminderTask) {
-  return ['scheduled', 'preparing', 'editing', 'cancelling'].includes(task.status)
+function isOff(task: ReminderTask) {
+  return ['disabled', 'cancelled', 'completed', 'failed'].includes(task.status)
 }
-function canCancel(task: ReminderTask) {
+function isOn(task: ReminderTask) {
+  return ['scheduled', 'editing', 'disabling', 'cancelling'].includes(task.status)
+}
+function canTurnOff(task: ReminderTask) {
   return task.status === 'scheduled' || (task.status === 'editing' && !!task.error)
 }
+function needsStopRetry(task: ReminderTask) {
+  return !!task.error && (task.status === 'enabling' || task.status === 'disabling')
+}
+function canEdit(task: ReminderTask) {
+  return task.scheduled && (task.status === 'scheduled' || isOff(task))
+}
+function canDelete(task: ReminderTask) {
+  return canTurnOff(task) || isOff(task) || needsStopRetry(task) || (task.status === 'deleting' && !!task.error)
+}
+function taskTitle(task: ReminderTask) {
+  return task.text || task.message || task.petName
+}
 const lists = computed(() => [
-  tasks.value.filter(isPending).sort((a, b) => a.at - b.at),
-  tasks.value.filter(task => !isPending(task)).sort((a, b) => b.at - a.at),
+  tasks.value.filter(task => task.scheduled).sort((a, b) => Number(isOff(a)) - Number(isOff(b)) || a.at - b.at),
+  tasks.value.filter(task => !task.scheduled).sort((a, b) => b.at - a.at),
 ])
 function status(task: ReminderTask) {
+  if (task.scheduled && isOff(task)) return t('reminders.status.disabled')
+  if (task.scheduled && task.status === 'scheduled') return t('reminders.on')
   if (task.status === 'editing' && task.error) return t('reminders.status.editInterrupted')
+  if (task.status === 'deleting' && task.error) return t('reminders.deletePending')
   if (task.status !== 'completed') return t('reminders.status.' + task.status)
   if (task.channel === 'popup') return t('reminders.status.popupDone')
   return t(task.scheduled ? 'reminders.status.notificationDue' : 'reminders.status.notificationSent')
@@ -71,14 +92,16 @@ function localInputValue(at: number) {
   const date = new Date(at)
   return new Date(at - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16)
 }
-function openForm(task: ReminderTask | null = null, opener?: Event) {
+function openForm(task: ReminderTask | null = null, opener?: Event, rearm = false) {
   original.value = task
+  enableOnSave.value = rearm
+  deleteTarget.value = null
   editButton = opener?.currentTarget instanceof HTMLButtonElement ? opener.currentTarget : null
   subject.value = task?.text ?? ''
   channel.value = task?.channel ?? 'popup'
   timing.value = task ? 'later' : 'now'
   const anchor = new Date(task?.at ?? Date.now())
-  time.value = task ? localInputValue(task.at) : ''
+  time.value = task && !rearm ? localInputValue(task.at) : ''
   const rule = task?.recurrence
   frequency.value = rule?.frequency ?? 'once'
   clock.value = rule && 'time' in rule ? rule.time : (task ? time.value.slice(11) : '09:00')
@@ -92,7 +115,7 @@ function openForm(task: ReminderTask | null = null, opener?: Event) {
   changeError.value = ''
   feedback.value = ''
   formOpen.value = true
-  void nextTick(() => subjectInput.value?.focus())
+  void nextTick(() => rearm ? timeInput.value?.focus() : subjectInput.value?.focus())
 }
 function closeForm() {
   formOpen.value = false
@@ -153,8 +176,8 @@ async function submit() {
     }
     const input = { channel: channel.value, text: subject.value, at, recurrence, pet: savedPet.value }
     if (previous) {
-      await edit(previous.id, input, previous.revision ?? 0)
-      feedback.value = 'reminders.updated'
+      await edit(previous.id, input, previous.revision ?? 0, enableOnSave.value)
+      feedback.value = enableOnSave.value ? 'reminders.enabled' : 'reminders.updated'
     } else {
       const task = await create(input)
       feedback.value = task.scheduled ? 'reminders.saved' : 'reminders.sent'
@@ -162,7 +185,16 @@ async function submit() {
     }
     closeForm()
   } catch (cause) {
-    formError.value = displayError(cause)
+    const code = cause instanceof Error ? cause.message : String(cause)
+    const previous = original.value
+    const saved = previous && tasks.value.find(task => task.id === previous.id)
+    if (enableOnSave.value && saved?.status === 'disabled' && saved.error === code
+        && saved.revision === (previous?.revision ?? 0) + 1) {
+      // The native handoff failed after the new time was saved. Retry from the saved alarm.
+      closeForm()
+      feedback.value = 'reminders.savedOff'
+      changeError.value = displayError(cause)
+    } else formError.value = displayError(cause)
   } finally {
     formAction.value = null
   }
@@ -181,20 +213,58 @@ async function testReminder() {
     formAction.value = null
   }
 }
-async function change(task: ReminderTask) {
+async function toggle(task: ReminderTask, event: Event) {
   if (changing.value !== null) return
-  const cancelling = isPending(task)
+  const enabling = isOff(task)
+  if (enabling && !task.recurrence && task.at <= Date.now()) {
+    openForm(task, event, true)
+    return
+  }
+  deleteTarget.value = null
   changing.value = task.id
   changeError.value = ''
   feedback.value = ''
   try {
-    await (cancelling ? cancel(task.id) : remove(task.id))
-    feedback.value = cancelling ? 'reminders.cancelled' : 'reminders.removed'
+    await setEnabled(task.id, enabling, task.revision ?? 0)
+    feedback.value = enabling ? 'reminders.enabled' : 'reminders.disabled'
   } catch (cause) {
-    changeError.value = displayError(cause)
+    if (enabling && (cause instanceof Error ? cause.message : String(cause)) === 'REMINDER_EXPIRED') {
+      openForm(task, event, true)
+    } else changeError.value = displayError(cause)
   } finally {
     changing.value = null
   }
+}
+async function deleteTask(task: ReminderTask) {
+  if (changing.value !== null) return
+  changing.value = task.id
+  changeError.value = ''
+  feedback.value = ''
+  try {
+    await remove(task.id, task.revision ?? 0)
+    feedback.value = task.scheduled ? 'reminders.deleted' : 'reminders.removed'
+  } catch (cause) {
+    changeError.value = displayError(cause)
+  } finally {
+    deleteTarget.value = null
+    changing.value = null
+    await nextTick()
+    const button = document.getElementById('delete-reminder-' + task.id) ?? addButton.value
+    button?.focus()
+  }
+}
+async function cancelDelete(task: ReminderTask) {
+  deleteTarget.value = null
+  await nextTick()
+  document.getElementById('delete-reminder-' + task.id)?.focus()
+}
+function requestDelete(task: ReminderTask) {
+  if (task.scheduled && task.status !== 'deleting') {
+    deleteTarget.value = task
+    changeError.value = ''
+    feedback.value = ''
+    void nextTick(() => document.getElementById('keep-reminder-' + task.id)?.focus())
+  } else void deleteTask(task)
 }
 </script>
 
@@ -207,7 +277,7 @@ async function change(task: ReminderTask) {
     <p v-if="!ready && !error" class="settings-muted" role="status">{{ t('reminders.loading') }}</p>
     <section class="settings-sheet" aria-labelledby="upcoming-reminders">
       <div class="section-heading">
-        <h2 id="upcoming-reminders">{{ t('reminders.pending') }}</h2>
+        <h2 id="upcoming-reminders">{{ t('reminders.alarms') }}</h2>
         <button v-if="!formOpen" ref="addButton" type="button" class="settings-button primary" :disabled="!ready || changing !== null" @click="openForm()">
           <Plus :size="16" aria-hidden="true" /> {{ t('reminders.add') }}
         </button>
@@ -215,6 +285,7 @@ async function change(task: ReminderTask) {
       <form v-if="formOpen" class="reminder-form" :aria-label="t(original ? 'reminders.edit' : 'reminders.add')" @submit.prevent="submit">
         <fieldset :disabled="!!formAction">
           <h3 v-if="original">{{ t('reminders.edit') }}</h3>
+          <p v-if="enableOnSave" class="settings-muted">{{ t('reminders.reschedule') }}</p>
           <label class="field">
             <span>{{ t('reminders.subject') }}</span>
             <textarea ref="subjectInput" v-model="subject" rows="2" name="subject" :placeholder="t('reminders.subjectHint')" />
@@ -239,7 +310,7 @@ async function change(task: ReminderTask) {
             </label>
             <label v-if="frequency === 'once'" class="field">
               <span>{{ t('reminders.localTime') }}</span>
-              <input v-model="time" type="datetime-local" name="at" required />
+              <input ref="timeInput" v-model="time" type="datetime-local" name="at" required />
             </label>
             <div v-else-if="frequency === 'interval' || frequency === 'afterMinutes'" class="minute-fields">
               <label class="field">
@@ -298,7 +369,7 @@ async function change(task: ReminderTask) {
           </div>
           <p v-if="formError" class="settings-error" role="alert">{{ formError }}</p>
           <div class="settings-actions">
-            <button type="submit" class="settings-button primary">{{ t(formAction === 'save' ? 'reminders.saving' : original ? 'reminders.saveChanges' : timing === 'later' ? 'reminders.schedule' : 'reminders.send') }}</button>
+            <button type="submit" class="settings-button primary">{{ t(formAction === 'save' ? 'reminders.saving' : enableOnSave ? 'reminders.saveAndEnable' : original ? 'reminders.saveChanges' : timing === 'later' ? 'reminders.schedule' : 'reminders.send') }}</button>
             <button type="button" class="settings-button" name="testReminder" @click="testReminder">{{ t(formAction === 'test' ? 'reminders.testing' : 'reminders.test') }}</button>
             <button type="button" class="settings-button" @click="closeForm">{{ t(original ? 'reminders.cancelChanges' : 'reminders.closeForm') }}</button>
           </div>
@@ -309,26 +380,46 @@ async function change(task: ReminderTask) {
       <template v-for="(list, index) in lists" :key="index">
         <h2 v-if="index && list.length" class="history-heading">{{ t('reminders.history', { count: list.length }) }}</h2>
         <ul v-if="list.length" class="reminder-list">
-          <li v-for="task in list" :key="task.id">
+          <li v-for="task in list" :key="task.id" :data-task-id="task.id">
             <component :is="task.channel === 'popup' ? MessageCircle : Bell" :size="19" aria-hidden="true" class="task-icon" />
             <div class="task-data">
-              <h3>{{ task.text || task.message || task.petName }}</h3>
-              <p>{{ t('reminders.' + task.channel) }} · {{ task.petName }} · {{ status(task) }}</p>
+              <h3>{{ taskTitle(task) }}</h3>
+              <p><span v-if="task.scheduled">#{{ task.id }} · </span>{{ t('reminders.' + task.channel) }} · {{ task.petName }} · {{ status(task) }}</p>
               <p v-if="task.recurrence">{{ formatReminderRecurrence(task.recurrence) }}</p>
-              <p><span v-if="task.recurrence && !index">{{ t('reminders.next') }} </span><time :datetime="new Date(task.at).toISOString()">{{ dateFormat.format(task.at) }}</time></p>
+              <p v-if="!task.recurrence || task.status === 'scheduled'">
+                <span v-if="task.scheduled">{{ t(task.status === 'scheduled' ? 'reminders.next' : 'reminders.configuredTime') }} </span>
+                <time :datetime="new Date(task.at).toISOString()">{{ dateFormat.format(task.at) }}</time>
+              </p>
               <p v-if="task.error" class="settings-error">{{ displayError(task.error) }}</p>
             </div>
+            <button v-if="task.scheduled" type="button" class="task-switch" name="toggleReminder" role="switch"
+              :aria-label="t('reminders.toggle', { subject: taskTitle(task) })" :aria-checked="isOn(task)"
+              :disabled="formOpen || changing !== null || !(canTurnOff(task) || isOff(task))" @click="toggle(task, $event)">
+              <span aria-hidden="true" class="switch-track" />
+            </button>
             <div class="task-actions">
-              <button v-if="task.status === 'scheduled' && task.scheduled" type="button" class="task-action"
-                :disabled="formOpen || changing !== null" :aria-label="t('reminders.edit') + ' · ' + (task.text || task.message || task.petName)"
+              <button v-if="canEdit(task)" type="button" name="editReminder" class="task-action"
+                :disabled="formOpen || changing !== null" :aria-label="t('reminders.edit') + ' · ' + taskTitle(task)"
                 @click="openForm(task, $event)">{{ t('reminders.edit') }}</button>
-              <button type="button" class="task-action" :disabled="formOpen || changing !== null || (!index && !canCancel(task))"
-                :aria-label="t(index ? 'reminders.remove' : 'reminders.cancel') + ' · ' + (task.text || task.message || task.petName)"
-                @click="change(task)">{{ t(index ? 'reminders.remove' : 'reminders.cancel') }}</button>
+              <button v-if="needsStopRetry(task)" type="button" name="retryDisableReminder" class="task-action"
+                :disabled="formOpen || changing !== null" @click="toggle(task, $event)">{{ t('reminders.retryDisable') }}</button>
+              <button v-if="deleteTarget?.id !== task.id" :id="'delete-reminder-' + task.id" type="button" name="deleteReminder" class="task-action danger"
+                :disabled="formOpen || changing !== null || !canDelete(task)"
+                :aria-label="t(task.scheduled ? 'reminders.delete' : 'reminders.remove') + ' · ' + taskTitle(task)"
+                @click="requestDelete(task)">{{ t(task.status === 'deleting' && task.error ? 'reminders.retryDelete' : task.scheduled ? 'reminders.delete' : 'reminders.remove') }}</button>
+            </div>
+            <div v-if="deleteTarget?.id === task.id" class="delete-confirm" role="group" :aria-labelledby="'delete-question-' + task.id">
+              <p :id="'delete-question-' + task.id">{{ t('reminders.deletePrompt', { subject: taskTitle(task) }) }}</p>
+              <div class="settings-actions">
+                <button :id="'keep-reminder-' + task.id" type="button" name="cancelDeleteReminder" class="settings-button" :disabled="changing !== null"
+                  @click="cancelDelete(task)">{{ t('settings.action.cancel') }}</button>
+                <button type="button" name="confirmDeleteReminder" class="settings-button confirm-danger" :disabled="changing !== null"
+                  @click="deleteTask(deleteTarget)">{{ t('reminders.confirmDelete') }}</button>
+              </div>
             </div>
           </li>
         </ul>
-        <p v-else-if="!index && ready" class="settings-muted">{{ t('reminders.empty') }}</p>
+        <p v-else-if="!index && ready" class="settings-muted">{{ t('reminders.noAlarms') }}</p>
       </template>
     </section>
   </SettingsPageFrame>
@@ -352,16 +443,31 @@ async function change(task: ReminderTask) {
 .companion-info { display: grid; gap: 2px; font-size: .88rem; }
 .companion-info a, .task-action { color: var(--green); }
 .reminder-list { list-style: none; margin: 0; padding: 0; }
-.reminder-list li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 10px; padding-block: 12px; }
+.reminder-list li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: start; gap: 4px 10px; padding-block: 12px; }
 .reminder-list li + li, .history-heading { border-top: 1px solid var(--line); }
 .history-heading { padding-top: 16px; }
 .task-icon { margin-block-start: 3px; color: var(--green); }
 .task-data { min-width: 0; overflow-wrap: anywhere; }
 .task-data p, .task-data time { color: var(--sub); font-size: .84rem; line-height: 1.55; }
 .task-data .settings-error { color: var(--danger-ink); }
-.task-actions { display: flex; flex-wrap: wrap; gap: 0 10px; align-items: center; }
+.task-switch { grid-column: 3; display: grid; place-items: center; min-width: 44px; min-height: 44px; padding: 0; border: 0; background: transparent; cursor: pointer; }
+.switch-track { display: flex; align-items: center; width: 44px; height: 26px; padding: 3px; border: 1px solid var(--sub); border-radius: 15px; background: var(--line); }
+.switch-track::before { content: ''; width: 18px; height: 18px; border-radius: 50%; background: var(--sub); }
+.task-switch[aria-checked="true"] .switch-track { justify-content: flex-end; border-color: var(--accent-solid); background: var(--accent-solid); }
+.task-switch[aria-checked="true"] .switch-track::before { background: var(--on-accent); }
+.task-actions { grid-column: 4; display: flex; flex-wrap: wrap; gap: 0 10px; align-items: center; }
+.delete-confirm { grid-column: 2 / -1; min-width: 0; overflow-wrap: anywhere; }
+.delete-confirm p { margin-block: 4px 8px; }
 .task-action { background: transparent; border: 0; min-height: 44px; padding-inline: 3px; font-size: .84rem; cursor: pointer; }
-.task-action:disabled { opacity: .55; cursor: default; }
+.task-action.danger { color: var(--danger-ink); }
+.task-action:disabled, .task-switch:disabled { opacity: .55; cursor: default; }
 .task-action:hover { text-decoration: underline; }
-@media (max-width: 520px) { .task-actions { grid-column: 2 / -1; justify-self: start; } }
+@media (max-width: 640px) {
+  .reminder-list li { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .task-actions { grid-column: 2 / -1; }
+}
+@media (forced-colors: active) {
+  .switch-track { border-color: ButtonText; }
+  .switch-track::before { background: ButtonText; forced-color-adjust: none; }
+}
 </style>

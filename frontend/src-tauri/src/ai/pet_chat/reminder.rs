@@ -1,4 +1,4 @@
-use super::{credentials, AiRequests, ChatCharacter, DeepSeek, INVALID_INPUT};
+use super::{credentials, AiRequests, ChatCharacter, ChatMode, DeepSeek, INVALID_INPUT};
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
@@ -14,7 +14,7 @@ pub(crate) async fn ai_pet_reminder_line(
     language: String,
 ) -> Result<String, String> {
     if !matches!(language.as_str(), "en-US" | "zh-CN")
-        || !character.is_valid()
+        || !character.is_valid_for(ChatMode::Pet)
         || subject.chars().count() > 1000
     {
         return Err(INVALID_INPUT.into());

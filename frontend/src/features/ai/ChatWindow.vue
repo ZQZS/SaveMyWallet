@@ -9,19 +9,21 @@ import { getAiKeyStatus } from '../../integrations/ai/deepseek'
 import type { PetCharacter } from '../pets/catalog'
 import PetChatDetailPicker from '../pets/PetChatDetailPicker.vue'
 import { petChatDetailOptions, selectedPetChatDetails, selectedPetChatOptions } from '../pets/petChatDetails'
-import { MAX_PET_MESSAGE_LENGTH, useGeneralChat, usePetChat } from '../pets/usePetChat'
+import { useGeneralChat, usePersonaChat, usePetChat } from '../pets/usePetChat'
 import { useReminders } from '../reminders/useReminders'
 import { useLedgerActionReview } from './useLedgerActionReview'
 
-const props = defineProps<{ pet?: PetCharacter; month: string; totals: MonthlySummary; floor: number }>()
+const props = defineProps<{ dialog?: boolean; pet?: PetCharacter; month: string; totals: MonthlySummary; floor: number }>()
 const emit = defineEmits<{ close: [] }>()
 const session = useLedgerSession()
 const reminders = useReminders()
 const { review, confirm, decline, forTurn } = useLedgerActionReview(session,
   input => reminders.create({ ...input, pet: props.pet }),
-  input => reminders.test({ ...input, pet: props.pet }))
-const { messages, draft, pending, error, send, stop, conversations, activeConversationId, newChat, selectChat } =
-  props.pet ? usePetChat(props.pet, props.month) : useGeneralChat(props.month)
+  input => reminders.test({ ...input, pet: props.pet }), reminders)
+const chat = props.pet
+  ? (props.dialog ? usePetChat : usePersonaChat)(props.pet, props.month)
+  : useGeneralChat(props.month)
+const { messages, draft, pending, error, send, stop, conversations, activeConversationId, newChat, selectChat, maxMessageLength } = chat
 const speaker = computed(() => props.pet?.name ?? t('chat.assistant'))
 const root = ref<HTMLElement | null>(null)
 const transcript = ref<HTMLElement | null>(null)
@@ -36,7 +38,7 @@ const detailAttachment = computed(() => shareMode.value === 'details'
   : undefined)
 const configured = ref<boolean | null>(null)
 const keyError = ref('')
-const tooLong = computed(() => Array.from(draft.value.trim()).length > MAX_PET_MESSAGE_LENGTH)
+const tooLong = computed(() => Array.from(draft.value.trim()).length > maxMessageLength)
 const canSend = computed(() => configured.value === true && !pending.value && !session.busy.value && !session.needsReload.value && !!draft.value.trim() && !tooLong.value
   && (!detailAttachment.value || detailAttachment.value.entries.length > 0))
 const keyNeedsAttention = computed(() => ['AI_KEY_MISSING', 'AI_KEY_INVALID', 'AI_AUTH'].includes(error.value))
@@ -57,7 +59,7 @@ function submit() {
   const facts = shareMode.value !== 'none' ? toReminderFacts(props.month, props.totals, props.floor) : undefined
   const ids = shareMode.value === 'details'
     ? selectedPetChatOptions(props.month, detailOptions.value, selectedIds.value).map(row => row.id) : []
-  void send(locale.value, facts, detailAttachment.value, forTurn(props.month, ids))
+  void send(locale.value, facts, detailAttachment.value, forTurn(props.month, ids, draft.value.trim()))
   input.value?.focus({ preventScroll: true })
 }
 
@@ -121,7 +123,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <component :is="pet ? 'dialog' : 'section'" ref="root" class="chat-window" :class="{ 'pet-dialog': pet, 'chat-page': !pet }"
+  <component :is="dialog ? 'dialog' : 'section'" ref="root" class="chat-window" :class="{ 'pet-dialog': dialog, 'chat-page': !dialog }"
     aria-labelledby="chat-title" :aria-describedby="review ? undefined : 'chat-disclosure'"
     @cancel="stop" @close="emit('close')">
     <header class="chat-heading">
@@ -130,12 +132,11 @@ onBeforeUnmount(() => {
         <img v-else-if="pet.avatar" :src="pet.avatar" alt="" />
         <strong v-else>{{ Array.from(pet.name)[0] }}</strong>
       </span>
-      <h2 v-if="pet" id="chat-title">{{ t('pets.chat.title', { name: pet.name }) }}</h2>
-      <h1 v-else id="chat-title">{{ t('chat.title') }}</h1>
-      <button v-if="pet" type="button" class="chat-close" autofocus :aria-label="t('pets.chat.close')" @click="closeChat">
+      <component :is="dialog ? 'h2' : 'h1'" id="chat-title">{{ pet ? t('pets.chat.title', { name: pet.name }) : t('chat.title') }}</component>
+      <button v-if="dialog" type="button" class="chat-close" autofocus :aria-label="t('pets.chat.close')" @click="closeChat">
         <X :size="20" aria-hidden="true" />
       </button>
-      <slot v-else name="month" />
+      <slot v-else name="controls" />
     </header>
     <nav class="thread-bar" :aria-label="t('pets.chat.chooseThread')">
       <label>
@@ -204,9 +205,9 @@ onBeforeUnmount(() => {
         {{ displayError(new Error(error)) }}
         <RouterLink v-if="keyNeedsAttention" :to="{ name: 'settings-ai' }">{{ t('ai.month.setup') }}</RouterLink>
       </div>
-      <p v-if="tooLong" class="chat-error" role="alert">{{ t('pets.chat.limit', { count: MAX_PET_MESSAGE_LENGTH }) }}</p>
+      <p v-if="tooLong" class="chat-error" role="alert">{{ t('pets.chat.limit', { count: maxMessageLength }) }}</p>
       <div class="compose-row">
-        <textarea ref="input" v-model="draft" rows="2" enterkeyhint="send" :maxlength="MAX_PET_MESSAGE_LENGTH * 2"
+        <textarea ref="input" v-model="draft" rows="2" enterkeyhint="send" :maxlength="maxMessageLength * 2"
           :readonly="pending" :aria-invalid="tooLong" :aria-label="t('pets.chat.message')"
           :placeholder="shareMode === 'details' ? t('pets.chat.detailsPlaceholder') : t('pets.chat.placeholder', { name: speaker })"
           @keydown.enter="handleEnter" />
@@ -265,6 +266,7 @@ onBeforeUnmount(() => {
 .compose-row { display: flex; align-items: flex-end; gap: 8px; }
 .compose-row textarea { flex: 1; min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: var(--ink); font: inherit; line-height: 1.4; resize: none; }
 .compose-row textarea::placeholder { color: var(--sub); opacity: 1; }
+.chat-page .compose-row textarea { resize: vertical; max-height: 26dvh; }
 .compose-row textarea:focus-visible, .chat-history:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
 .send-button, .stop-button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 44px; padding: 6px 12px; border-radius: 9px; font-size: .87rem; font-weight: 650; }
 .send-button { border: 1px solid var(--accent-solid); color: var(--on-accent); background: var(--accent-solid); }

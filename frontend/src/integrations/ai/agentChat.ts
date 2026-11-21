@@ -12,6 +12,7 @@ import { requestAgentTurn, type PetChatInput } from './deepseek.ts'
 
 export type AgentChatInput = Omit<PetChatInput, 'character'> & (
   | { mode: 'pet'; character: PetChatInput['character'] }
+  | { mode: 'persona'; character: PetChatInput['character'] & { scenario?: string } }
   | { mode: 'general'; character?: never }
 )
 
@@ -30,7 +31,7 @@ export interface LedgerActionResult {
 }
 
 // This local callback owns the selection IDs and user confirmation. The IPC request carries only the enabled flag.
-type ChatActionName = LedgerActionName | ReminderActionName
+type ChatActionName = LedgerActionName | ReminderActionName | 'manage_reminder'
 export type RunLedgerAction = (name: ChatActionName, args: Record<string, unknown>, signal: AbortSignal) => Promise<LedgerActionResult>
 
 const model = DEEPSEEK_MODELS['deepseek-flash']
@@ -128,7 +129,8 @@ export async function chatWithAgent(input: AgentChatInput, signal: AbortSignal, 
           // The provider may repeat a call with a different ID, shuffled rows, or a blank subject.
           const normalized = isReminderAction(definition.name)
             ? { ...args, text: typeof args.text === 'string' ? args.text.trim() : '' }
-            : args
+            : definition.name === 'manage_reminder' && typeof args.subject === 'string'
+              ? { ...args, subject: args.subject.trim() } : args
           const fields = Object.keys(normalized).sort().map(key => {
             const value = normalized[key]
             if (key === 'recurrence') {

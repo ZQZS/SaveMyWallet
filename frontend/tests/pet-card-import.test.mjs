@@ -34,6 +34,17 @@ function cardChunk(key, data) {
 
 const hasError = code => error => error instanceof PetCardImportError && error.code === code
 
+test('menu persona imports retain the setting and longer dialogue without splitting Unicode characters', async () => {
+  const text = '🦉'.repeat(600) + ' 记得那座灯塔。'
+  const data = { ...character, scenario: '{{char}}与{{user}}在灯塔值班。', mes_example: text }
+  const card = await parsePetCard(jsonFile({ spec: 'chara_card_v2', data }))
+  assert.equal(card.scenario, character.name + '与{{user}}在灯塔值班。')
+  assert.equal(card.dialogueExample, text)
+  const oversized = await parsePetCard(jsonFile({ ...character, scenario: '🦊'.repeat(8200), mes_example: '🦉'.repeat(8200) }))
+  assert.equal(oversized.scenario, '🦊'.repeat(8192))
+  assert.equal(oversized.dialogueExample, '🦉'.repeat(8192))
+})
+
 test('flat V1 JSON and nested V2/V3 cards retain authored text and only the supported fields', async () => {
   assert.deepEqual(await parsePetCard(jsonFile(character)), {
     name: '猫头鹰🦉', description: '山里的会计', personality: '干练', greetings: ['我是 猫头鹰🦉。'],

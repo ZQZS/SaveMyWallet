@@ -31,7 +31,7 @@ export function startReminders() {
     }
     const due = reminders.tasks.value.filter(task => task.status === 'scheduled'
       && (task.channel === 'notification' || (visible() && !reminders.activePopup.value)))
-    const needsRecovery = reminders.tasks.value.some(task => ['editing', 'preparing', 'cancelling'].includes(task.status))
+    const needsRecovery = reminders.tasks.value.some(task => ['editing', 'preparing', 'cancelling', 'disabling', 'enabling', 'deleting'].includes(task.status))
     const now = Date.now()
     const popup = reminders.activePopup.value
     let delay = Infinity

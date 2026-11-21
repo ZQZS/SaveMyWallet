@@ -18,6 +18,7 @@ fn turns(
         description: "简练".into(),
         voice_sample: "看哪月？".into(),
         opening: None,
+        scenario: None,
     };
     let question = ChatMessage {
         role: Role::User,

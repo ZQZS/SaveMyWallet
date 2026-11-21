@@ -1,15 +1,15 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { effectScope } from 'vue'
-import { forgetPetChats, MAX_PET_MESSAGE_LENGTH, useGeneralChat, usePetChat } from '../src/features/pets/usePetChat.ts'
+import { forgetPetChats, MAX_MENU_MESSAGE_LENGTH, MAX_PET_MESSAGE_LENGTH, useGeneralChat, usePersonaChat, usePetChat } from '../src/features/pets/usePetChat.ts'
 
 const month = '2026-11'
 const pet = { name: '测试狐', description: '好奇', greetings: ['一起查线索？'] }
 
-function openChat(t, character, request, selectedMonth = month) {
+function openChat(t, character, request, selectedMonth = month, enter = usePetChat) {
   const scope = effectScope()
   t.after(() => scope.stop())
-  const chat = scope.run(() => usePetChat(character, selectedMonth, request))
+  const chat = scope.run(() => enter(character, selectedMonth, request))
   return { ...chat, close: () => scope.stop() }
 }
 
@@ -409,4 +409,84 @@ test('通用聊天可独立发送日常话题，按月份保存对话，收窄�
   const otherMonth = scope.run(() => useGeneralChat('2027-05', request))
   assert.deepEqual(otherMonth.messages.value, [])
   assert.equal(otherMonth.draft.value, '')
+})
+
+test('full-page personas carry their card and keep separate conversations from the pet window and each other', async t => {
+  const calls = []
+  const request = async input => { calls.push(input); return '我们可以接着讨论。' }
+  const selectedMonth = '2029-01'
+  const profile = { ...pet, id: 'role-one', description: '设'.repeat(5100), scenario: '潮湿的雨夜',
+    dialogueExample: '声'.repeat(6100), greetings: ['开'.repeat(5000)] }
+  const menu = openChat(t, profile, request, selectedMonth, usePersonaChat)
+  const modal = openChat(t, profile, request, selectedMonth)
+  const other = openChat(t, { ...pet, id: 'role-two' }, request, selectedMonth, usePersonaChat)
+  const question = '🧭'.repeat(MAX_MENU_MESSAGE_LENGTH)
+  assert.equal(await ask(menu, question), true)
+  assert.equal(calls[0].mode, 'persona')
+  assert.deepEqual(calls[0].character, { name: pet.name, description: profile.description,
+    scenario: profile.scenario, opening: profile.greetings[0], voiceSample: profile.dialogueExample })
+  assert.equal(calls[0].facts, undefined)
+  assert.equal(calls[0].details, undefined)
+  menu.draft.value = '还没写完的小说'
+  modal.draft.value = '桌宠草稿'
+  other.draft.value = '另一个人设'
+  assert.deepEqual(modal.messages.value, [])
+  assert.deepEqual(other.messages.value, [])
+  menu.close()
+  const back = openChat(t, profile, request, selectedMonth, usePersonaChat)
+  assert.equal(back.messages.value[0].content, question)
+  assert.equal(back.draft.value, '还没写完的小说')
+  assert.equal(await ask(back, question + '字'), false)
+  assert.equal(await ask(modal, question), false)
+  assert.equal(await ask(modal, '你好呀'), true)
+  assert.equal(calls.at(-1).mode, 'pet')
+  assert.equal(calls.at(-1).character.scenario, undefined)
+  assert.equal(calls.at(-1).character.description.length, 2000)
+  assert.equal(calls.at(-1).character.voiceSample.length, 500)
+  back.close()
+  modal.close()
+  forgetPetChats(profile.id)
+  assert.deepEqual(openChat(t, profile, request, selectedMonth, usePersonaChat).messages.value, [])
+  assert.deepEqual(openChat(t, profile, request, selectedMonth).messages.value, [])
+  assert.equal(other.draft.value, '另一个人设')
+})
+
+test('menu chat resends whole, permitted exchanges within the shared character budget', async t => {
+  const scope = effectScope()
+  t.after(() => scope.stop())
+  const calls = []
+  const content = '🦊'.repeat(MAX_MENU_MESSAGE_LENGTH)
+  const chat = scope.run(() => useGeneralChat('2029-02', async input => {
+    calls.push(input)
+    return input.messages.at(-1).content === content ? content : '答'
+  }))
+  for (let i = 0; i < 18; i++) await ask(chat, '问' + i)
+  assert.equal(calls.at(-1).messages.length, 33)
+  assert.equal(calls.at(-1).messages[0].content, '问1')
+  for (let i = 0; i < 3; i++) assert.equal(await ask(chat, content), true)
+  assert.equal(calls.at(-1).messages.length, 3)
+  assert.ok(calls.at(-1).messages.every(item => item.content === content))
+  assert.equal(chat.messages.value.length, 42)
+  const facts = { month: '2029-02', balanceCents: 123, dueCents: 0, warningFloorCents: 0 }
+  await ask(chat, '分享汇总', facts)
+  await ask(chat, '切回日常聊天')
+  assert.deepEqual(calls.at(-1).messages, [{ role: 'user', content: '切回日常聊天' }])
+})
+
+test('switching out of a persona aborts the old request and a late response cannot enter another conversation', async t => {
+  let signal
+  const pending = Promise.withResolvers()
+  const selectedMonth = '2029-03'
+  const role = { ...pet, id: 'role-awaiting' }
+  const old = openChat(t, role, (_input, control) => { signal = control; return pending.promise }, selectedMonth, usePersonaChat)
+  const result = ask(old, '给我一个故事')
+  old.close()
+  assert.equal(signal.aborted, true)
+  const other = openChat(t, { ...pet, id: 'other-role' }, async () => '新的回复', selectedMonth, usePersonaChat)
+  pending.resolve('过期回复')
+  assert.equal(await result, false)
+  assert.deepEqual(other.messages.value, [])
+  const back = openChat(t, role, async () => '', selectedMonth, usePersonaChat)
+  assert.equal(back.draft.value, '给我一个故事')
+  assert.deepEqual(back.messages.value, [])
 })

@@ -11,6 +11,7 @@ export interface PetCharacter {
   id: string
   name: string
   description: string
+  scenario?: string
   avatar: string
   greetAvatar?: string
   greetings: string[]

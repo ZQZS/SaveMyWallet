@@ -8,7 +8,8 @@ import { clipCharacterText } from './cardImport.ts'
 import { petChatDetailsPayload, type PetChatDetails } from './petChatDetails.ts'
 
 export const MAX_PET_MESSAGE_LENGTH = 1000
-const MAX_CONTEXT_TURNS = 5
+export const MAX_MENU_MESSAGE_LENGTH = 32_768
+const MENU_CONTEXT_LENGTH = 131_072
 
 interface Exchange {
   question: string
@@ -37,7 +38,7 @@ function newChatList(petId: string | null) {
   return reactive({ petId, chats: [emptyChat(1)], selectedIndex: 0, openViews: 0 })
 }
 
-// General chat and each pet keep separate in-memory conversations for each month.
+// A pet's modal and its full-page chat have independent histories and sharing scopes.
 const chatLists = new Map<string, ReturnType<typeof newChatList>>()
 
 export function forgetPetChats(petId: string) {
@@ -59,24 +60,37 @@ async function requestAgent(input: AgentChatInput, signal: AbortSignal, runActio
 }
 
 export function usePetChat(pet: PetCharacter, month: string, request = requestAgent) {
-  const opening = clipCharacterText(pet.greetings[0] || '', 1000)
-  const voiceSample = clipCharacterText(pet.dialogueExample || opening, 500)
+  return useCharacterChat('pet', pet, month, request)
+}
+
+export function usePersonaChat(pet: PetCharacter, month: string, request = requestAgent) {
+  return useCharacterChat('persona', pet, month, request)
+}
+
+function useCharacterChat(mode: 'pet' | 'persona', pet: PetCharacter, month: string, request: typeof requestAgent) {
+  const fullPage = mode === 'persona'
+  const opening = clipCharacterText(pet.greetings[0] || '', fullPage ? 8192 : 1000)
+  const voiceSample = clipCharacterText(pet.dialogueExample || opening, fullPage ? 8192 : 500)
   const character = {
-    name: clipCharacterText(pet.name, 128), description: clipCharacterText(pet.description, 2000),
+    name: clipCharacterText(pet.name, 128),
+    description: clipCharacterText(pet.description, fullPage ? 16_384 : 2000),
+    ...(fullPage && pet.scenario && { scenario: clipCharacterText(pet.scenario, 8192) }),
     voiceSample, ...(opening && opening !== voiceSample ? { opening } : {}),
   }
-  return useConversation(month, pet.id, (input, signal, runAction) => request({ ...input, mode: 'pet', character }, signal, runAction))
+  return useConversation(mode, month, pet.id, (input, signal, runAction) => request({ ...input, mode, character }, signal, runAction))
 }
 
 export function useGeneralChat(month: string, request = requestAgent) {
-  return useConversation(month, null, (input, signal, runAction) => request({ ...input, mode: 'general' }, signal, runAction))
+  return useConversation('general', month, null, (input, signal, runAction) => request({ ...input, mode: 'general' }, signal, runAction))
 }
 
 function useConversation(
-  month: string, petId: string | null,
+  mode: AgentChatInput['mode'], month: string, petId: string | null,
   request: (input: Omit<AgentChatInput, 'mode' | 'character'>, signal: AbortSignal, runAction?: RunLedgerAction) => Promise<string>,
 ) {
-  const key = JSON.stringify([petId, month])
+  const key = JSON.stringify([mode, petId, month])
+  const maxMessageLength = mode === 'pet' ? MAX_PET_MESSAGE_LENGTH : MAX_MENU_MESSAGE_LENGTH
+  const maxContextTurns = mode === 'pet' ? 5 : 16
   const list = chatLists.get(key) ?? newChatList(petId)
   list.openViews++
   chatLists.set(key, list)
@@ -136,7 +150,8 @@ function useConversation(
   async function send(language: AppLocale, facts?: ReminderFacts, details?: PetChatDetails, runAction?: RunLedgerAction): Promise<boolean> {
     const question = draft.value.trim()
     if (active || !question) return false
-    if (Array.from(question).length > MAX_PET_MESSAGE_LENGTH || (facts && facts.month !== month)
+    const questionLength = Array.from(question).length
+    if (questionLength > maxMessageLength || (facts && facts.month !== month)
         || (details && (!facts || details.month !== month || !details.entries.length))) {
       error.value = 'AI_INVALID_INPUT'
       return false
@@ -144,9 +159,16 @@ function useConversation(
     const attachment = details && petChatDetailsPayload(details)
     const sharedRows = attachment && countSharedRows(attachment)
     const conversation = current.value
-    const recent = conversation.exchanges.slice(-MAX_CONTEXT_TURNS)
+    const recent = conversation.exchanges.slice(-maxContextTurns)
+    let remaining = MENU_CONTEXT_LENGTH - questionLength
     let first = recent.length
-    while (first > 0 && canResend(recent[first - 1], Boolean(facts), sharedRows)) first--
+    while (first > 0) {
+      const turn = recent[first - 1]
+      if (!canResend(turn, Boolean(facts), sharedRows)) break
+      remaining -= Array.from(turn.question).length + Array.from(turn.contextReply ?? turn.reply).length
+      if (remaining < 0) break
+      first--
+    }
     const context = messagesFor(recent.slice(first), true)
     context.push({ role: 'user', content: question })
     const controller = new AbortController()
@@ -169,7 +191,7 @@ function useConversation(
         contextReply })
       savedExchange = conversation.exchanges.at(-1)
       // Older exchanges stay visible, but their bill details can no longer be sent as context.
-      const expired = conversation.exchanges.at(-MAX_CONTEXT_TURNS - 1)
+      const expired = conversation.exchanges.at(-maxContextTurns - 1)
       if (expired) delete expired.sharedRows
       if (conversation.draft.trim() === question) conversation.draft = ''
     }
@@ -222,7 +244,7 @@ function useConversation(
     }
   }
 
-  return { conversations, activeConversationId, newChat, selectChat, draft, messages, pending, error, send, stop }
+  return { conversations, activeConversationId, newChat, selectChat, maxMessageLength, draft, messages, pending, error, send, stop }
 }
 
 // The same purchase can appear twice. Removing either copy should also withhold earlier replies about the pair.

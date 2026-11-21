@@ -131,7 +131,7 @@ fn completion_body(
         // send its selected-row result back to the provider for a follow-up.
         if round.calls.iter().any(|call| call.name != INSPECT)
             || !tool_calls_valid(&round.calls, tools)
-            || round.text.chars().count() > mode.max_reply_chars()
+            || round.text.chars().count() > mode.history_reply_limit()
             || round.results.len() != round.calls.len()
         {
             return Err(INVALID_INPUT.into());
@@ -153,7 +153,7 @@ fn completion_body(
     }
     let max_tokens = match mode {
         ChatMode::Pet => 600,
-        ChatMode::General => 1800,
+        ChatMode::General | ChatMode::Persona => 16_384,
     };
     let mut body =
         json!({"model":"deepseek-flash","thinking":{"type":"disabled"},"max_tokens":max_tokens});
@@ -173,6 +173,7 @@ fn completion_body(
 fn parse_reply(
     raw: &Value,
     mode: ChatMode,
+    language: &str,
     tools: &[&ToolDefinition],
 ) -> Result<AgentReply, String> {
     let choice = &raw["choices"][0];
@@ -182,13 +183,25 @@ fn parse_reply(
         Value::Null => "",
         _ => return Err(BAD_REPLY.into()),
     };
-    if text.chars().count() > mode.max_reply_chars() {
+    if mode == ChatMode::Pet && text.chars().count() > super::MAX_REPLY_CHARS {
         return Err(BAD_REPLY.into());
     }
+    let no_calls = message
+        .get("tool_calls")
+        .is_none_or(|calls| calls.is_null() || calls.as_array().is_some_and(Vec::is_empty));
+    let mut text = text.to_owned();
     let mut calls = Vec::new();
     match choice["finish_reason"].as_str() {
-        Some("stop")
-            if !text.is_empty() && message["tool_calls"].as_array().is_none_or(Vec::is_empty) => {}
+        Some("stop") if !text.is_empty() && no_calls => {}
+        // Long-form menu answers can reach the provider's output budget. Keep the useful
+        // text, but do not execute a partial tool request or retry it automatically.
+        Some("length") if mode != ChatMode::Pet && !text.is_empty() && no_calls => {
+            text.push_str(if language == "zh-CN" {
+                "\n\n（本次回复已达模型输出上限，可以发送“继续”。）"
+            } else {
+                "\n\n(This reply reached the model’s output limit. Send “continue” to read more.)"
+            });
+        }
         Some("tool_calls") if !tools.is_empty() => {
             for call in message["tool_calls"].as_array().ok_or(BAD_REPLY)? {
                 if call["type"] != "function" {
@@ -210,10 +223,7 @@ fn parse_reply(
         }
         _ => return Err(BAD_REPLY.into()),
     }
-    Ok(AgentReply {
-        text: text.to_owned(),
-        calls,
-    })
+    Ok(AgentReply { text, calls })
 }
 
 #[tauri::command]
@@ -255,8 +265,14 @@ pub(crate) async fn ai_agent_chat_turn(
     requests
         .run(request_id, async move {
             let key = credentials::load(&app)?;
-            let raw = DeepSeek::official()?.post_completion(&key, &body).await?;
-            parse_reply(&raw, mode, &tools)
+            let provider = match mode {
+                ChatMode::Pet => DeepSeek::official()?,
+                ChatMode::General | ChatMode::Persona => {
+                    DeepSeek::official_with_timeout(std::time::Duration::from_secs(600))?
+                }
+            };
+            let raw = provider.post_completion(&key, &body).await?;
+            parse_reply(&raw, mode, &language, &tools)
         })
         .await
 }

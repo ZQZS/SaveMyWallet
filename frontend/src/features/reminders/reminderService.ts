@@ -5,6 +5,7 @@ import { inReminderWindow, nextReminderOccurrence, parseReminderRecurrence, prev
 
 export type ReminderChannel = 'popup' | 'notification'
 export type ReminderStatus = 'preparing' | 'scheduled' | 'editing' | 'completed' | 'cancelling' | 'cancelled' | 'failed'
+  | 'disabled' | 'disabling' | 'enabling' | 'deleting'
 
 export interface ReminderInput {
   channel: ReminderChannel
@@ -47,7 +48,7 @@ export interface ReminderStore {
   add(task: Omit<ReminderTask, 'id'>): Promise<ReminderTask>
   transition(id: number, from: ReminderStatus, to: ReminderStatus, error?: string, changes?: ReminderChanges,
     expected?: { at: number; revision: number }): Promise<ReminderTask | null>
-  remove(id: number, from: ReminderStatus): Promise<boolean>
+  remove(id: number, from: ReminderStatus, expectedRevision?: number): Promise<boolean>
 }
 
 interface ReminderServices {
@@ -84,19 +85,31 @@ function inCurrentZone(plan: ReminderPlan, timeZone: string) {
   return { ...plan, at, timeZone }
 }
 
-function planInput(input: ReminderInput, now: number) {
+function planInput(input: ReminderInput, now: number, allowPastOnce = false) {
   if (input.channel !== 'popup' && input.channel !== 'notification') throw new Error('REMINDER_STATE')
   if (typeof input.text !== 'string' || Array.from(input.text.trim()).length > 300) throw new Error('REMINDER_INVALID_TEXT')
   const recurrence = input.recurrence === undefined ? undefined : parseReminderRecurrence(input.recurrence)
   const first = recurrence ? nextReminderOccurrence(recurrence, now) : now
   const at = input.at ?? first
   const scheduled = input.at !== undefined || recurrence !== undefined
-  if (!Number.isSafeInteger(at) || !Number.isFinite(new Date(at).getTime()) || (scheduled && at <= now)
+  if (!Number.isSafeInteger(at) || !Number.isFinite(new Date(at).getTime())
+      || (scheduled && at <= now && !(allowPastOnce && !recurrence))
       || (recurrence && nextReminderOccurrence(recurrence, at - 1) !== at)) throw new Error('REMINDER_INVALID_TIME')
   return { channel: input.channel, text: input.text.trim(), at, scheduled, recurrence, lastLocalDay: undefined,
     // Anchor the series to its first occurrence when an explicit future start skips earlier matches.
     recurrenceAfter: recurrence ? (at === first ? now : at - 1) : undefined,
     timeZone: recurrence ? Intl.DateTimeFormat().resolvedOptions().timeZone : undefined }
+}
+
+function inactive(task: ReminderTask) {
+  return ['disabled', 'completed', 'cancelled', 'failed'].includes(task.status)
+}
+
+function mayHaveNativeAlarm(task: ReminderTask) {
+  if (task.pendingEdit?.channel === 'notification') return true
+  if (task.channel !== 'notification' || !task.scheduled) return false
+  // An elapsed one-shot may still be waiting for the OS to wake the device.
+  return !['disabled', 'cancelled', 'failed'].includes(task.status) || task.error === 'REMINDER_INTERRUPTED'
 }
 
 export function createReminderService(services: ReminderServices) {
@@ -131,9 +144,89 @@ export function createReminderService(services: ReminderServices) {
   }
 
   async function reload() {
-    tasks.value = (await store.list()).sort((a, b) => b.id - a.id)
+    const records = (await store.list()).sort((a, b) => b.id - a.id)
+    closeObsoletePopup(records)
+    tasks.value = records
     ready.value = true
     error.value = ''
+  }
+
+  function closeObsoletePopup(records: ReminderTask[]) {
+    const open = activePopup.value
+    if (!open) return
+    const current = records.find(task => task.id === open.id)
+    if (!current || current.channel !== 'popup' || !['completed', 'scheduled'].includes(current.status)
+        || (current.revision ?? 0) !== (open.revision ?? 0)) activePopup.value = null
+  }
+
+  async function checkedTask(id: number, expectedRevision?: number) {
+    const task = (await store.list()).find(record => record.id === id)
+    if (!task || (expectedRevision !== undefined && (task.revision ?? 0) !== expectedRevision)) throw new Error('REMINDER_STATE')
+    return task
+  }
+
+  async function erase(task: ReminderTask) {
+    if (!await store.remove(task.id, task.status, task.revision ?? 0)) throw new Error('REMINDER_STATE')
+    handedOff.delete(task.id)
+    services.onChange?.()
+  }
+
+  async function finishStop(task: ReminderTask, recovering = false, rollback?: ReminderStatus) {
+    try {
+      await delivery.cancel(task.id)
+    } catch (cause) {
+      const reason = errorCode(cause, 'REMINDER_DELIVERY')
+      // Keep a deletion intent, including on a failed recovery. The OS may still have the alarm.
+      const status = rollback ?? task.status
+      if (task.status !== status || task.error !== reason) await transition(task, status, reason)
+      if (recovering) return
+      throw new Error(reason)
+    }
+    if (task.status === 'deleting') await erase(task)
+    else await transition(task, task.status === 'cancelling' ? 'cancelled' : 'disabled', undefined, { pendingEdit: undefined })
+  }
+
+  function nextActivation(plan: ReminderPlan, time: number): Pick<ReminderPlan, 'at' | 'recurrenceAfter' | 'timeZone'> {
+    if (!plan.recurrence) {
+      if (plan.at <= time) throw new Error('REMINDER_EXPIRED')
+      return { at: plan.at }
+    }
+    // Retain the original first occurrence if it is still in the future, including
+    // schedules which explicitly start at a later matching date.
+    const after = Math.max(time, plan.recurrenceAfter ?? plan.at - 1)
+    return { at: nextUnseen(plan.recurrence, after, plan.lastLocalDay), recurrenceAfter: after,
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }
+  }
+
+  async function finishEnable(task: ReminderTask, recovering = false) {
+    const time = now()
+    // Enabling is durable before crossing the native bridge. A restart must not replay
+    // a one-shot that might already have fired, or leave an alarm armed but marked off.
+    if (!task.recurrence && task.at <= time) {
+      await finishStop(await transition(task, 'disabling'), true)
+      if (!recovering) throw new Error('REMINDER_EXPIRED')
+      return
+    }
+    const next = nextActivation(task, time)
+    try {
+      await schedule(task.id, { ...task, ...next }, !recovering)
+    } catch (cause) {
+      const reason = errorCode(cause, 'REMINDER_DELIVERY')
+      if (!recovering || task.error !== reason) await transition(task, recovering ? 'enabling' : 'disabled', reason)
+      if (!recovering) throw new Error(reason)
+      return
+    }
+    await transition(task, 'scheduled', undefined, next)
+  }
+
+  async function enable(task: ReminderTask, replacement?: ReminderPlan) {
+    const plan = replacement ?? task
+    const next = nextActivation(plan, now())
+    const native = plan.channel === 'notification'
+    const updated = await transition(task, native ? 'enabling' : 'scheduled', undefined, {
+      ...replacement, ...next, revision: (task.revision ?? 0) + 1,
+    })
+    if (native) await finishEnable(updated)
   }
 
   async function register(task: ReminderTask, recovering = false) {
@@ -178,18 +271,6 @@ export function createReminderService(services: ReminderServices) {
     }
   }
 
-  async function finishCancellation(task: ReminderTask) {
-    try {
-      await delivery.cancel(task.id)
-    } catch (cause) {
-      const reason = errorCode(cause, 'REMINDER_DELIVERY')
-      // The OS may still deliver this schedule. Keep it available to cancel.
-      await transition(task, task.pendingEdit ? 'editing' : 'scheduled', reason)
-      throw new Error(reason)
-    }
-    return transition(task, 'cancelled', undefined, { pendingEdit: undefined })
-  }
-
   // Keep the previous plan and the requested replacement until the OS operation succeeds.
   // Scheduling by the same ID and cancelling by ID are idempotent across a process restart.
   async function finishEdit(task: ReminderTask, recovering = false) {
@@ -229,14 +310,16 @@ export function createReminderService(services: ReminderServices) {
 
   async function reconcile() {
     const records = (await store.list()).sort((a, b) => a.at - b.at || a.id - b.id)
+    closeObsoletePopup(records)
     const zone = Intl.DateTimeFormat().resolvedOptions().timeZone
     const open = activePopup.value
     if (open?.recurrence?.frequency === 'randomWindow' && !inReminderWindow(open.recurrence, open.at, now())) {
       activePopup.value = null
     }
     for (let task of records) {
+      if (task.status === 'deleting' || task.status === 'disabling' || task.status === 'cancelling') { await finishStop(task, true); continue }
+      if (task.status === 'enabling') { await finishEnable(task, true); continue }
       if (task.status === 'preparing') { await register(task, true); continue }
-      if (task.status === 'cancelling') { await finishCancellation(task); continue }
       if (task.status === 'editing') { await finishEdit(task, true); continue }
       if (task.status !== 'scheduled') continue
       const local = inCurrentZone(task, zone)
@@ -289,25 +372,56 @@ export function createReminderService(services: ReminderServices) {
     })
   }
 
-  async function edit(id: number, input: ReminderInput, expectedRevision?: number) {
-    const previous = (await store.list()).find(item => item.id === id)
-    if (!previous || previous.status !== 'scheduled' || !previous.scheduled
-        || (expectedRevision !== undefined && expectedRevision !== (previous.revision ?? 0))) throw new Error('REMINDER_STATE')
-    const plan = planInput(input, now())
+  async function edit(id: number, input: ReminderInput, expectedRevision?: number, enableAfterSave = false) {
+    const previous = await checkedTask(id, expectedRevision)
+    const off = inactive(previous)
+    if (!previous.scheduled || (!off && previous.status !== 'scheduled')) throw new Error('REMINDER_STATE')
+    const plan = planInput(input, now(), off && !enableAfterSave)
     if (!plan.scheduled) throw new Error('REMINDER_INVALID_TIME')
     const { petId, petName, message } = previous
     const wording = previous.text === plan.text ? { petId, petName, message } : await services.prepareText(plan.text, input.pet, plan.at)
     return run(async () => {
-      const current = (await store.list()).find(item => item.id === id)
-      if (!current || current.status !== 'scheduled' || (current.revision ?? 0) !== (previous.revision ?? 0)) throw new Error('REMINDER_STATE')
+      const current = await checkedTask(id, previous.revision ?? 0)
+      if (current.status !== previous.status) throw new Error('REMINDER_STATE')
       const pendingEdit: ReminderPlan = { ...plan, ...wording }
       if (current.lastLocalDay && plan.recurrence && JSON.stringify(current.recurrence) === JSON.stringify(plan.recurrence)) {
         pendingEdit.lastLocalDay = current.lastLocalDay
         pendingEdit.at = nextUnseen(plan.recurrence, plan.at - 1, current.lastLocalDay)
       }
       try {
-        const task = await transition(current, 'editing', undefined, { pendingEdit })
-        await finishEdit(task)
+        if (off) {
+          if (mayHaveNativeAlarm(current)) await delivery.cancel(id)
+          if (enableAfterSave) await enable(current, pendingEdit)
+          else await transition(current, 'disabled', undefined, { ...pendingEdit, revision: (current.revision ?? 0) + 1 })
+        } else {
+          const task = await transition(current, 'editing', undefined, { pendingEdit })
+          await finishEdit(task)
+        }
+      } finally { await reload() }
+    })
+  }
+
+  function setEnabled(id: number, enabled: boolean, expectedRevision?: number): Promise<void> {
+    return run(async () => {
+      const task = await checkedTask(id, expectedRevision)
+      if (!task.scheduled) throw new Error('REMINDER_STATE')
+      try {
+        if (enabled) {
+          if (task.status === 'scheduled') return
+          if (!inactive(task)) throw new Error('REMINDER_STATE')
+          await enable(task)
+        } else {
+          if (inactive(task)) return
+          if (task.status !== 'scheduled' && !(task.error && ['editing', 'enabling', 'disabling'].includes(task.status))) {
+            throw new Error('REMINDER_STATE')
+          }
+          const changes = { revision: (task.revision ?? 0) + 1 }
+          if (mayHaveNativeAlarm(task)) {
+            const stopping = await transition(task, 'disabling', undefined, changes)
+            const rollback = task.status === 'scheduled' || task.status === 'editing' ? task.status : undefined
+            await finishStop(stopping, false, rollback)
+          } else await transition(task, 'disabled', undefined, { ...changes, pendingEdit: undefined })
+        }
       } finally { await reload() }
     })
   }
@@ -317,9 +431,9 @@ export function createReminderService(services: ReminderServices) {
       const task = (await store.list()).find(item => item.id === id)
       if (!task || (task.status !== 'scheduled' && !(task.status === 'editing' && task.error))) throw new Error('REMINDER_STATE')
       try {
-        if (task.pendingEdit) await finishCancellation(await transition(task, 'cancelling'))
+        if (task.pendingEdit) await finishStop(await transition(task, 'cancelling'), false, 'editing')
         else if (task.channel === 'popup') await transition(task, 'cancelled')
-        else if (task.recurrence || task.at > now()) await finishCancellation(await transition(task, 'cancelling'))
+        else if (task.recurrence || task.at > now()) await finishStop(await transition(task, 'cancelling'), false, 'scheduled')
         else {
           await transition(task, 'completed')
           throw new Error('REMINDER_STATE')
@@ -328,18 +442,16 @@ export function createReminderService(services: ReminderServices) {
     })
   }
 
-  function remove(id: number): Promise<void> {
+  function remove(id: number, expectedRevision?: number): Promise<void> {
     return run(async () => {
-      const task = (await store.list()).find(item => item.id === id)
-      if (!task || !['completed', 'failed', 'cancelled'].includes(task.status)) throw new Error('REMINDER_STATE')
-      if (task.channel === 'notification' && task.scheduled && (task.status === 'completed' || task.error === 'REMINDER_INTERRUPTED')) {
-        // The scheduled time can precede OS delivery (for example during Android Doze).
-        // Keep the history entry available for retry until the native schedule is cleared.
-        await delivery.cancel(task.id)
-      }
-      if (!await store.remove(id, task.status)) throw new Error('REMINDER_STATE')
-      services.onChange?.()
-      await reload()
+      const task = await checkedTask(id, expectedRevision)
+      try {
+        if (task.status === 'deleting') { await finishStop(task); return }
+        if (!inactive(task) && task.status !== 'scheduled' && !task.error) throw new Error('REMINDER_STATE')
+        if (mayHaveNativeAlarm(task)) {
+          await finishStop(await transition(task, 'deleting', undefined, { revision: (task.revision ?? 0) + 1 }))
+        } else await erase(task)
+      } finally { await reload() }
     })
   }
 
@@ -359,5 +471,5 @@ export function createReminderService(services: ReminderServices) {
   }
 
   return { tasks: readonly(tasks), ready: readonly(ready), error: readonly(error), activePopup: readonly(shownPopup),
-    refresh, create, edit, cancel, remove, test, dismissPopup }
+    list: () => store.list(), refresh, create, edit, cancel, setEnabled, remove, test, dismissPopup }
 }

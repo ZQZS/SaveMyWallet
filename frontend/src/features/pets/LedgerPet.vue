@@ -112,7 +112,7 @@ function dismiss() {
       </button>
     </div>
     <PetPickerDialog v-if="pickerOpen" @close="pickerOpen = false" />
-    <ChatWindow v-if="chatOpen" :key="JSON.stringify([activePet.id, month])" :pet="activePet" :month="month"
+    <ChatWindow v-if="chatOpen" :key="JSON.stringify([activePet.id, month])" dialog :pet="activePet" :month="month"
       :totals="totals" :floor="floor" @close="chatOpen = false" />
   </aside>
 </template>

@@ -5,24 +5,29 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
 const INTERACTION: &str = include_str!("../../../resources/ai/prompts/interaction.md");
+const PERSONA_CHAT: &str = include_str!("../../../resources/ai/prompts/persona-chat.md");
 const SHARED_LEDGER: &str = include_str!("../../../resources/ai/prompts/chat-ledger.md");
 const LEDGER_ACTIONS: &str = include_str!("../../../resources/ai/prompts/chat-actions.md");
 const GENERAL_CHAT: &str = "你是 SaveMyWallet 中的通用聊天助手。根据用户的问题自然地闲聊、解释、写作或协助完成其他话题。应用将用户本轮的文字放在最后一条用户消息的 JSON 字段 message 中。账本数据仅在用户主动分享时可用。";
 const MAX_REPLY_CHARS: usize = 2000;
+const MENU_INPUT_CHARS: usize = 32_768;
+const MENU_CONTEXT_CHARS: usize = 131_072;
 const INVALID_INPUT: &str = "AI_INVALID_INPUT";
 
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Copy, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum ChatMode {
     Pet,
     General,
+    Persona,
 }
 
 impl ChatMode {
-    fn max_reply_chars(self) -> usize {
-        match self {
-            Self::Pet => MAX_REPLY_CHARS,
-            Self::General => 12000,
+    fn history_reply_limit(self) -> usize {
+        if self == Self::Pet {
+            MAX_REPLY_CHARS
+        } else {
+            MENU_CONTEXT_CHARS
         }
     }
 }
@@ -35,18 +40,28 @@ pub(crate) struct ChatCharacter {
     voice_sample: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     opening: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scenario: Option<String>,
 }
 
 impl ChatCharacter {
-    fn is_valid(&self) -> bool {
+    fn is_valid_for(&self, mode: ChatMode) -> bool {
+        let (description, sample, opening) = match mode {
+            ChatMode::Persona => (16_384, 8_192, 8_192),
+            _ => (2000, 500, 1000),
+        };
         !self.name.trim().is_empty()
             && self.name.chars().count() <= 128
-            && self.description.chars().count() <= 2000
-            && self.voice_sample.chars().count() <= 500
+            && self.description.chars().count() <= description
+            && self.voice_sample.chars().count() <= sample
+            && self
+                .scenario
+                .as_ref()
+                .is_none_or(|scene| mode == ChatMode::Persona && scene.chars().count() <= 8192)
             && self
                 .opening
                 .as_ref()
-                .is_none_or(|line| line.chars().count() <= 1000)
+                .is_none_or(|line| line.chars().count() <= opening)
     }
 }
 
@@ -159,13 +174,16 @@ fn chat_messages(
     let prompt = match (mode, character) {
         (ChatMode::Pet, Some(_)) => INTERACTION,
         (ChatMode::General, None) => GENERAL_CHAT,
+        (ChatMode::Persona, Some(_)) => PERSONA_CHAT,
         _ => return Err(INVALID_INPUT.into()),
     };
+    let pet = mode == ChatMode::Pet;
+    let max_messages = if pet { 11 } else { 33 };
     if !matches!(language, "zh-CN" | "en-US")
-        || character.is_some_and(|c| !c.is_valid())
+        || character.is_some_and(|c| !c.is_valid_for(mode))
         || facts.is_some_and(|facts| !facts.is_valid())
         || details.is_some_and(|details| !details.is_valid_for(facts))
-        || !(1..=11).contains(&messages.len())
+        || !(1..=max_messages).contains(&messages.len())
         || messages.len() % 2 == 0
     {
         return Err(INVALID_INPUT.into());
@@ -173,8 +191,14 @@ fn chat_messages(
 
     let ledger_context = if facts.is_some() { SHARED_LEDGER } else { "" };
     let actions = if actions_enabled { LEDGER_ACTIONS } else { "" };
-    let mut system =
-        format!("{prompt}\n{ledger_context}\n{actions}\n回复语言 / Response language: {language}");
+    let mut system = format!("{prompt}\n{ledger_context}\n{actions}");
+    if pet {
+        system.push_str(&format!("\n回复语言 / Response language: {language}"));
+    } else {
+        system.push_str(&format!(
+            "\n按用户要求的语言、格式和篇幅回答。默认回复语言为 {language}。"
+        ));
+    }
     if actions_enabled {
         let clock = chrono::Local::now()
             .format("%Y-%m-%dT%H:%M:%S%:z (%A)")
@@ -182,14 +206,20 @@ fn chat_messages(
         system.push_str(&format!("\n设备本地时钟 / Device local time: {clock}"));
     }
     let mut turns = vec![json!({"role":"system", "content":system})];
+    let mut context_chars = 0;
     for (index, message) in messages.iter().enumerate() {
         let (role, limit) = if index % 2 == 0 {
-            (Role::User, 1000)
+            (Role::User, if pet { 1000 } else { MENU_INPUT_CHARS })
         } else {
-            (Role::Assistant, mode.max_reply_chars())
+            (Role::Assistant, mode.history_reply_limit())
         };
         let text = message.content.trim();
-        if message.role != role || !(1..=limit).contains(&text.chars().count()) {
+        let chars = text.chars().count();
+        context_chars += chars;
+        if message.role != role
+            || !(1..=limit).contains(&chars)
+            || context_chars > MENU_CONTEXT_CHARS
+        {
             return Err(INVALID_INPUT.into());
         }
         if index + 1 == messages.len() {
@@ -204,6 +234,14 @@ fn chat_messages(
                     .filter(|line| !line.is_empty() && *line != character.voice_sample.trim())
                 {
                     profile["opening"] = json!(opening);
+                }
+                if let Some(scene) = character
+                    .scenario
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|scene| !scene.is_empty())
+                {
+                    profile["scenario"] = json!(scene);
                 }
                 input["character"] = profile;
             }
@@ -269,6 +307,7 @@ mod tests {
             description: "口吻像侦探".into(),
             voice_sample: "搭档，你好！".into(),
             opening: None,
+            scenario: None,
         }
     }
 

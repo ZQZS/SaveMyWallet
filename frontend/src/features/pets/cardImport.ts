@@ -2,6 +2,7 @@ export interface ImportedPetCard {
   name: string
   description: string
   personality: string
+  scenario?: string
   greetings: string[]
   dialogueExample?: string
   avatar?: Blob
@@ -83,8 +84,14 @@ function readCharacter(json: string): ImportedPetCard {
     }
   }
   const card: ImportedPetCard = { name, description: displayText(data.description), personality: displayText(data.personality), greetings: [...greetings] }
-  const sample = clipCharacterText(plainText(data.mes_example), 500)
-  if (sample) card.dialogueExample = clipCharacterText(sample.replace(/\{\{char\}\}|<char>|<bot>/gi, () => speaker), 500)
+  function profileExcerpt(value: unknown): string {
+    const excerpt = clipCharacterText(plainText(value), 8192)
+    return clipCharacterText(excerpt.replace(/\{\{char\}\}|<char>|<bot>/gi, () => speaker), 8192)
+  }
+  const scenario = profileExcerpt(data.scenario)
+  if (scenario) card.scenario = scenario
+  const sample = profileExcerpt(data.mes_example)
+  if (sample) card.dialogueExample = sample
   return card
 }
 

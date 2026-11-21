@@ -92,11 +92,12 @@ export const reminderStore: ReminderStore = {
       }
     })
   },
-  remove(id: number, from: ReminderStatus) {
+  remove(id: number, from: ReminderStatus, expectedRevision?: number) {
     return transaction<boolean>('readwrite', (store, finish) => {
       const request = store.get(id)
       request.onsuccess = () => {
-        if (request.result?.status !== from) return finish(false)
+        const task: ReminderTask | undefined = request.result
+        if (!task || task.status !== from || (expectedRevision !== undefined && (task.revision ?? 0) !== expectedRevision)) return finish(false)
         store.delete(id)
         finish(true)
       }

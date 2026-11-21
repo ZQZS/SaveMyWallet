@@ -3,11 +3,13 @@ import type { LedgerSession } from '../../app/ledgerSession.ts'
 import { displayError, t } from '../../i18n/index.ts'
 import type { LedgerActionResult, RunLedgerAction } from '../../integrations/ai/agentChat.ts'
 import { isReminderAction, prepareReminderAction, type CreateReminder, type ReminderActionName, type TestReminder } from '../reminders/reminderActions.ts'
+import { prepareReminderManagement, type ReminderManagement } from '../reminders/reminderManagement.ts'
 import { createLedgerActionScope, type PreparedLedgerAction } from './ledgerActions.ts'
 
-type ActionPreview = { name: PreparedLedgerAction['name'] | ReminderActionName; lines: string[] }
+type ActionPreview = { name: PreparedLedgerAction['name'] | ReminderActionName | 'manage_reminder'; lines: string[] }
 
-export function useLedgerActionReview(session: LedgerSession, createReminder?: CreateReminder, testReminder?: TestReminder) {
+export function useLedgerActionReview(session: LedgerSession, createReminder?: CreateReminder, testReminder?: TestReminder,
+  reminderManagement?: ReminderManagement) {
   const review = shallowRef<ActionPreview | null>(null)
   let decide: ((approved: boolean) => void) | undefined
 
@@ -30,7 +32,7 @@ export function useLedgerActionReview(session: LedgerSession, createReminder?: C
     })
   }
 
-  function forTurn(month: string, selectedIds: readonly string[]): RunLedgerAction {
+  function forTurn(month: string, selectedIds: readonly string[], question = ''): RunLedgerAction {
     const scope = createLedgerActionScope(session, month, selectedIds)
     const requestedAt = Date.now()
     return async (name, args, signal): Promise<LedgerActionResult> => {
@@ -38,6 +40,14 @@ export function useLedgerActionReview(session: LedgerSession, createReminder?: C
       const cancelled = () => ({ status: 'cancelled' as const, message: t('chat.action.cancelled', { action }) })
       if (signal.aborted) return cancelled()
       try {
+        if (name === 'manage_reminder') {
+          if (!reminderManagement) throw new Error('REMINDER_STORAGE')
+          const prepared = await prepareReminderManagement(args, question, reminderManagement)
+          if (signal.aborted) return cancelled()
+          if (prepared.unchanged) return { status: 'unchanged', message: prepared.message }
+          if (!await ask(prepared, signal) || !await prepared.apply(signal)) return cancelled()
+          return { status: 'applied', message: prepared.message }
+        }
         if (isReminderAction(name)) {
           if (!createReminder) throw new Error('REMINDER_STORAGE')
           const prepared = prepareReminderAction(name, args, requestedAt)
