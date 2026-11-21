@@ -1,4 +1,5 @@
 import { settingsNavigationMessages } from './settingsNavigation.ts'
+import { appearanceMessages } from './appearance.ts'
 import { aiSettingsMessages } from './aiSettings.ts'
 import { syncMessages } from './sync.ts'
 import { syncConflictMessages } from './syncConflict.ts'
@@ -6,6 +7,7 @@ import { syncConflictMessages } from './syncConflict.ts'
 export const settingsMessages = {
   'zh-CN': {
     ...settingsNavigationMessages['zh-CN'],
+    ...appearanceMessages['zh-CN'],
     ...aiSettingsMessages['zh-CN'],
     ...syncMessages['zh-CN'],
     ...syncConflictMessages['zh-CN'],
@@ -37,6 +39,7 @@ export const settingsMessages = {
   },
   'en-US': {
     ...settingsNavigationMessages['en-US'],
+    ...appearanceMessages['en-US'],
     ...aiSettingsMessages['en-US'],
     ...syncMessages['en-US'],
     ...syncConflictMessages['en-US'],

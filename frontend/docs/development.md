@@ -33,6 +33,7 @@ Windows 和安卓共用 Vue、TypeScript、Tauri 2 和 Rust 代码，每台设�
 | `src/features/statistics/` | 按开始月份至截至月份汇总工资、应还和预计结余，首尾月份均计入，也可快捷选择最近 6 或 12 个月。支出、结余和平台占比图共用月度账本的计算结果，选中月份后可进入对应账本。 |
 | `src/features/budget/` | 编辑默认工资、当前月工资覆盖和结余警告线，预览应用新设置后的结余。 |
 | `src/features/settings/` | 设置首页按通用、账本数据和扩展配置分组。子页在 `settingsRoutes.ts` 注册。[备份页面](../src/features/settings/BackupSettingsPage.vue)协调系统选择器、预览与确认。 |
+| `src/features/appearance/` | 维护预设主题、配色、照片背景和创建向导。`main.ts` 在挂载应用前读取本机外观并应用共享 CSS 变量，向导预览使用同一套变量。 |
 | `src/i18n/` | 本机语言偏好、参数插值、人民币和月份格式化、可展示的原生错误。在 `messages/` 中为简中与英文提供相同键与参数。 |
 | `src/domain/`、`src/data/` | 前者定义业务类型、金额解析和纯汇总函数。后者定义 `LedgerRepository` 和调用 Tauri 命令的 SQLite 适配器。 |
 | `src/shared/styles/` | 跨页面使用的基础和表单样式。功能组件独有的样式跟随组件。 |

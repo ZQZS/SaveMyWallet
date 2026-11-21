@@ -128,7 +128,7 @@ function applyVoided(entry: Entry, voided: boolean, whole: boolean) {
 .monthly-ledger { display: grid; min-width: 0; gap: 20px; color: var(--ink); }
 .summary-with-pet { min-width: 0; border-radius: 16px; background: var(--surface); }
 .repayment-details { border-radius: 15px; scroll-margin-top: 12px; }
-.repayment-details:focus-visible { outline: 3px solid #3b895e; outline-offset: 3px; }
+.repayment-details:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 3px; }
 .monthly-ledger h1 { margin: 0; }
 .monthly-ledger button { font-family: inherit; cursor: pointer; }
 .monthly-ledger button:disabled { cursor: default; opacity: 0.55; }
@@ -151,10 +151,10 @@ function applyVoided(entry: Entry, voided: boolean, whole: boolean) {
 .month-controls button:hover:not(:disabled) { color: var(--green); background: var(--soft); }
 .add-button {
   display: inline-flex; align-items: center; justify-content: center; gap: 7px;
-  border: 1px solid #184d39; border-radius: 10px; min-height: 41px; padding: 8px 16px;
-  color: #fffef6; background: #184d39; font-weight: 650; white-space: nowrap;
+  border: 1px solid var(--accent-solid); border-radius: 10px; min-height: 41px; padding: 8px 16px;
+  color: var(--on-accent); background: var(--accent-solid); font-weight: 650; white-space: nowrap;
 }
-.add-button:hover:not(:disabled) { background: #103b2b; }
+.add-button:hover:not(:disabled) { text-decoration: underline; text-underline-offset: 3px; }
 .notice { border-radius: 10px; background: var(--soft); padding: 6px 14px; min-height: 44px; font-size: 0.88rem; }
 .notice [role="status"] { min-width: 0; overflow-wrap: anywhere; }
 .notice button { display: inline-flex; align-items: center; gap: 5px; flex: none; background: transparent; border: 0; color: var(--green); min-height: 40px; font-weight: 650; }

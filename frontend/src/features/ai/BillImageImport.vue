@@ -359,7 +359,7 @@ onBeforeUnmount(() => {
 .batch-summary { display: grid; gap: 4px; overflow-wrap: anywhere; }
 .batch-summary strong { font-variant-numeric: tabular-nums; }
 .draft-choice { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 44px; cursor: pointer; }
-.draft-choice input { flex: none; width: 18px; height: 18px; min-height: 0; margin: 0; padding: 0; accent-color: var(--green); }
+.draft-choice input { flex: none; width: 18px; height: 18px; min-height: 0; margin: 0; padding: 0; accent-color: var(--accent-solid); }
 .draft-choice:has(input:disabled) { cursor: default; }
 .select-all { font-weight: 600; }
 .draft-list { list-style: none; padding: 0; margin: 0; }
@@ -367,7 +367,7 @@ onBeforeUnmount(() => {
 .draft-list .draft-choice { flex: 1; }
 .draft-content { min-width: 0; overflow-wrap: anywhere; }
 .draft-list small { display: block; color: var(--sub); }
-.draft-list .draft-issue { color: #a03123; }
+.draft-list .draft-issue { color: var(--danger-ink); }
 .draft-list .draft-match { color: var(--green); font-weight: 600; }
 .draft-list .draft-facts { display: flex; flex-wrap: wrap; gap: 2px 10px; font-variant-numeric: tabular-nums; }
 .draft-list button { flex: none; }

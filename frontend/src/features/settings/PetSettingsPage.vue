@@ -27,8 +27,8 @@ const { enabled, setEnabled } = usePets()
 .visibility-control { min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 16px; font-weight: 650; cursor: pointer; }
 .visibility-control input { flex: none; appearance: none; position: relative; width: 44px; height: 26px; margin: 0; border: 1px solid var(--sub); border-radius: 15px; background: var(--line); cursor: pointer; }
 .visibility-control input::after { content: ''; display: block; width: 18px; height: 18px; margin: 3px; border-radius: 50%; background: var(--sub); }
-.visibility-control input:checked { background: var(--green); border-color: var(--green); }
-.visibility-control input:checked::after { transform: translateX(18px); background: var(--surface); }
+.visibility-control input:checked { background: var(--accent-solid); border-color: var(--accent-solid); }
+.visibility-control input:checked::after { transform: translateX(18px); background: var(--on-accent); }
 @media (forced-colors: active) {
   .visibility-control input { appearance: auto; width: 20px; height: 20px; }
   .visibility-control input::after { display: none; }

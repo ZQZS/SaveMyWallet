@@ -35,7 +35,7 @@ onBeforeUnmount(() => {
   overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--line); border-radius: 16px;
   background: var(--surface); color: var(--ink);
 }
-.pet-dialog::backdrop { background: #202e2766; }
+.pet-dialog::backdrop { background: var(--dialog-backdrop); }
 .pet-dialog header {
   position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between;
   gap: 12px; padding: 10px 0; background: var(--surface);

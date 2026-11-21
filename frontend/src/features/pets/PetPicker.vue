@@ -131,7 +131,7 @@ async function confirmRemoval(id: string, name: string) {
 .import-row, .card-actions, .remove-confirm > div { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .import-button, .select-button, .confirm-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 6px 12px; border: 1px solid var(--line); background: var(--surface); color: var(--green); }
 .format-hint, .description, .status { color: var(--sub); font-size: .85rem; line-height: 1.5; }
-.error { color: #943e2d; font-size: .9rem; }
+.error { color: var(--danger-ink); font-size: .9rem; }
 .pet-list { display: grid; gap: 9px; list-style: none; padding: 0; margin: 0; }
 .pet-card { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 10px 14px; padding: 13px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
 .pet-card.current { border-color: var(--green); }
@@ -145,7 +145,7 @@ async function confirmRemoval(id: string, name: string) {
 .current-label { display: inline-flex; align-items: center; gap: 3px; color: var(--green); font-size: .83rem; font-weight: 650; }
 .remove-button { display: grid; place-items: center; width: 44px; color: var(--sub); }
 .remove-confirm { grid-column: 1 / -1; display: grid; gap: 8px; border-top: 1px solid var(--line); padding-top: 10px; color: var(--ink); font-size: .9rem; }
-.confirm-button { background: #8c382a; color: white; border-color: #8c382a; }
+.confirm-button { background: var(--danger-solid); color: var(--on-danger); border-color: var(--danger-solid); }
 @media (max-width: 550px) {
   .pet-card { grid-template-columns: auto minmax(0, 1fr); gap: 6px 10px; padding: 10px; }
   .avatar { width: 46px; }

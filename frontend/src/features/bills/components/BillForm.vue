@@ -185,5 +185,5 @@ function submit() {
 <style scoped>
 .duplicate-review { display: grid; gap: 4px; overflow-wrap: anywhere; }
 .duplicate-review label { display: flex; align-items: center; gap: 8px; min-height: 44px; }
-.duplicate-review input[type="checkbox"] { flex: none; width: 1.1rem; height: 1.1rem; min-height: 0; margin: 0; padding: 0; accent-color: var(--green); }
+.duplicate-review input[type="checkbox"] { flex: none; width: 1.1rem; height: 1.1rem; min-height: 0; margin: 0; padding: 0; accent-color: var(--accent-solid); }
 </style>

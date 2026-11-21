@@ -120,7 +120,7 @@ function openBill() {
 .terms { border-top: 1px solid var(--line); padding-top: 16px; }
 .term-fields { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, .8fr); gap: 12px; }
 .planner textarea { resize: vertical; min-height: 64px; padding: 10px 12px; font: inherit; font-weight: 400; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: var(--paper); }
-.planner textarea:focus-visible, .table-wrap:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.planner textarea:focus-visible, .table-wrap:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .planner-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .planner-actions a { color: var(--green); font-size: .875rem; }
 .projection > p { font-weight: 600; }
@@ -129,6 +129,6 @@ table { width: 100%; table-layout: fixed; border-collapse: separate; border-spac
 td, th { padding: 7px 6px; text-align: right; overflow-wrap: anywhere; border-bottom: 1px solid var(--line); }
 th:first-child { text-align: left; }
 thead th { position: sticky; top: 0; background: var(--soft); color: var(--green); }
-td small { display: block; color: #84561c; }
+td small { display: block; color: var(--warning-ink); }
 @media (max-width: 600px) { .term-fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .term-fields > :first-child { grid-column: 1 / -1; } }
 </style>

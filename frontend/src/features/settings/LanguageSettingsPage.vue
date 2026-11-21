@@ -22,5 +22,5 @@ import SettingsPageFrame from './SettingsPageFrame.vue'
 .language-options legend { margin-bottom: 10px; padding: 0; font-weight: 650; }
 .language-option { display: flex; align-items: center; gap: 12px; cursor: pointer; min-height: 46px; }
 .language-option + .language-option { border-top: 1px solid var(--line); }
-.language-option input { width: 18px; height: 18px; margin: 0 2px; accent-color: var(--green); }
+.language-option input { width: 18px; height: 18px; margin: 0 2px; accent-color: var(--accent-solid); }
 </style>

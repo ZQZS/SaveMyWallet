@@ -78,7 +78,7 @@ thead th { color: var(--sub); font-size: .8rem; font-weight: 550; }
 .proportion { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
 .track { height: 6px; flex: 1; margin-inline: 10%; background: var(--soft); }
 .track, .track > span { border-radius: 4px; }
-.track > span { display: block; height: 100%; background: #52816a; }
+.track > span { display: block; height: 100%; background: var(--green); }
 .details-cell { padding: 0 12px; background: var(--paper); text-align: start; }
 .details-cell ul { margin: 0; padding: 0; list-style: none; }
 .details-cell li { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, max-content); align-items: center; gap: 12px; padding: 10px 0; }

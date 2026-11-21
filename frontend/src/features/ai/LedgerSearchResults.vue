@@ -86,7 +86,7 @@ ul { list-style: none; padding: 0; }
 li + li { border-top: 1px solid var(--line); }
 .entry { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 12px 2px; text-decoration: none; color: var(--ink); }
 .entry:is(:hover, :focus-visible) strong, .entry svg { color: var(--green); }
-.entry:focus-visible { outline: 2px solid var(--green); }
+.entry:focus-visible { outline: 2px solid var(--focus-ring); }
 .description, .amount { display: grid; gap: 4px; overflow-wrap: anywhere; }
 .amount { max-width: 12em; text-align: right; font-variant-numeric: tabular-nums; }
 @media (max-width: 480px) {

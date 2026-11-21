@@ -68,7 +68,7 @@ function setChecked(entries: Entry[], event: Event) {
 .choose-month { gap: 8px; font-size: .85rem; }
 .choose-entry { width: 44px; }
 .choose-month:has(:disabled), .choose-entry:has(:disabled) { cursor: default; }
-.month-group input[type="checkbox"] { flex: none; width: 18px; height: 18px; min-height: 0; padding: 0; margin: 0; accent-color: var(--green); }
+.month-group input[type="checkbox"] { flex: none; width: 18px; height: 18px; min-height: 0; padding: 0; margin: 0; accent-color: var(--accent-solid); }
 .bill-link {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, max-content) auto;

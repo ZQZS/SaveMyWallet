@@ -44,7 +44,7 @@
 }
 
 .ledger-editor :is(a, button, input, select):focus-visible {
-  outline: 2px solid var(--green);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -127,9 +127,9 @@
 }
 
 .ledger-primary {
-  border: 1px solid var(--green);
-  background: var(--green);
-  color: #fffef9;
+  border: 1px solid var(--accent-solid);
+  background: var(--accent-solid);
+  color: var(--on-accent);
 }
 
 .ledger-secondary {
@@ -195,9 +195,9 @@
 
 .ledger-summary > svg { flex: none; margin-top: 1px; }
 .ledger-summary p { margin-top: 3px; }
-.ledger-summary-warning { background: #fbefd4; color: #795523; }
+.ledger-summary-warning { background: var(--warning-bg); color: var(--warning-ink); }
 .ledger-hint { color: var(--sub); font-size: .84rem; font-weight: 400; }
-.ledger-error { color: #a03123; font-size: .875rem; }
+.ledger-error { color: var(--danger-ink); font-size: .875rem; }
 
 .ledger-platform-add {
   display: grid;

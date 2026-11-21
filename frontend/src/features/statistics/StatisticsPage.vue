@@ -166,13 +166,13 @@ h2 { font-size: 1.1rem; letter-spacing: -.025em; }
 .month-bounds { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; max-width: 100%; }
 .month-filter { display: grid; gap: 4px; min-width: 0; font-size: .8rem; color: var(--sub); }
 .month-filter input { width: 100%; min-width: 0; min-height: 42px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: var(--ink); padding: 4px 8px; }
-.month-error { color: #a03123; font-size: .875rem; }
+.month-error { color: var(--danger-ink); font-size: .875rem; }
 .period-summary { display: grid; grid-template-columns: 1.25fr 1fr 1fr; margin: 0; border-radius: 16px; background: var(--soft); overflow: hidden; }
 .period-summary > div { min-width: 0; padding: clamp(16px, 2.5vw, 28px); align-content: center; }
 .period-summary dt { font-size: .88rem; color: var(--sub); }
 .period-summary dd { margin: 5px 0 0; font-weight: 650; font-size: clamp(1.25rem, 2.9vw, 2rem); letter-spacing: -.04em; }
-.period-summary .period-balance { background: var(--green); color: #fffef9; }
-.period-balance dt { color: #e0ecde; }
+.period-summary .period-balance { background: var(--hero-bg); color: var(--hero-ink); }
+.period-balance dt { color: inherit; }
 .period-balance dd { font-size: clamp(1.65rem, 3.5vw, 2.5rem); }
 .statistics dd, .platform-bars { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .trends { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
@@ -187,7 +187,7 @@ h2 { font-size: 1.1rem; letter-spacing: -.025em; }
 .share { font-size: .8rem; color: var(--sub); }
 .bar-track, .bar-track > span { display: block; height: 8px; border-radius: 4px; }
 .bar-track { background: var(--soft); }
-.bar-track > span { background: #52816a; }
+.bar-track > span { background: var(--green); }
 .empty { margin-top: 18px; }
 @media (max-width: 800px) { .trends { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 580px) {

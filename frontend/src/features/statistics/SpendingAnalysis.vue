@@ -80,8 +80,8 @@ h2 svg { color: var(--green); flex-shrink: 0; }
 .actions { gap: 12px; flex-wrap: wrap; }
 .actions a { color: var(--green); font-size: .85rem; }
 .action { min-height: 42px; border: 1px solid var(--line); border-radius: 9px; padding: 6px 14px; background: var(--surface); color: var(--ink); font-weight: 600; }
-.primary { background: var(--green); color: var(--surface); border-color: var(--green); }
-.error { color: #a03123; font-size: .875rem; }
+.primary { background: var(--accent-solid); color: var(--on-accent); border-color: var(--accent-solid); }
+.error { color: var(--danger-ink); font-size: .875rem; }
 @media (pointer: coarse) {
   .scope button, .action { min-height: 44px; }
 }

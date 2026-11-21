@@ -138,14 +138,14 @@ h1 { overflow-wrap: anywhere; }
 .undo { justify-self: start; }
 .selection-bar { position: sticky; z-index: 2; bottom: 12px; display: grid; gap: 8px;
   padding: 12px 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface);
-  box-shadow: 0 3px 16px #202e271a; }
+  box-shadow: 0 3px 16px rgb(0 0 0 / 10%); }
 .selection-total { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .selection-total strong, .void-dialog strong { font-variant-numeric: tabular-nums; }
 .selection-total button { min-height: 32px; }
-.void-selection, .confirm-void { color: #943c2a; }
+.void-selection, .confirm-void { color: var(--danger-ink); }
 .void-dialog { width: min(26rem, calc(100% - 2rem)); max-height: calc(100% - 2rem); margin: auto; padding: 20px;
   color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 14px; }
-.void-dialog::backdrop { background: #202e2766; }
+.void-dialog::backdrop { background: var(--dialog-backdrop); }
 .void-dialog p { margin: 8px 0; color: var(--sub); }
 .void-dialog ul { padding: 0; margin-bottom: 16px; max-height: 38vh; overflow-y: auto; list-style: none; }
 .void-dialog li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 0;

@@ -139,9 +139,9 @@ watch(() => props.selectedMonth, async () => {
 
 <style scoped>
 .trend-chart {
-  --chart-paid: #28664d;
-  --chart-due: #81a99a;
-  --chart-estimated: #af844c;
+  --chart-paid: var(--green);
+  --chart-due: color-mix(in srgb, var(--green) 58%, var(--surface));
+  --chart-estimated: var(--warning-ink);
   container-type: inline-size;
   min-width: 0;
   font-variant-numeric: tabular-nums;
@@ -152,7 +152,7 @@ watch(() => props.selectedMonth, async () => {
 .chart-key i { flex: none; width: 9px; height: 9px; border-radius: 2px; }
 .paid { background: var(--chart-paid); }
 .due { background: var(--chart-due); }
-.estimated { background: repeating-linear-gradient(135deg, #e0c49b 0 3px, var(--chart-estimated) 3px 5px); }
+.estimated { background: repeating-linear-gradient(135deg, var(--warning-bg) 0 3px, var(--chart-estimated) 3px 5px); }
 .chart-grid { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; margin: 19px 0 32px; }
 .chart-grid.crosses-year { margin-bottom: 48px; }
 .axis, .plot { position: relative; height: 154px; }
@@ -160,10 +160,10 @@ watch(() => props.selectedMonth, async () => {
 .axis-width { grid-area: 1 / 1; visibility: hidden; }
 .tick-label { position: absolute; right: 0; transform: translateY(-50%); white-space: nowrap; }
 .grid-line { position: absolute; inset-inline: 0; border-top: 1px dashed var(--line); }
-.grid-line.baseline { border-top: 1px solid #818e83; }
+.grid-line.baseline { border-top: 1px solid var(--sub); }
 .line-chart, .month-columns { position: absolute; inset: 0; width: 100%; height: 100%; }
 .line-chart { overflow: visible; }
-.line-chart polygon { fill: #41856b16; }
+.line-chart polygon { fill: var(--chart-paid); fill-opacity: .1; }
 .line-chart polyline { fill: none; stroke: var(--chart-paid); stroke-width: 2.5; stroke-linejoin: round; }
 .month-columns { display: grid; }
 .month-columns button {
@@ -175,8 +175,8 @@ watch(() => props.selectedMonth, async () => {
   background: transparent;
   color: var(--sub);
 }
-.month-columns button:hover, .month-columns button[aria-pressed="true"] { background: #427d5f0c; }
-.month-columns button:focus-visible { z-index: 1; outline: 2px solid var(--green); outline-offset: 0; }
+.month-columns button:hover, .month-columns button[aria-pressed="true"] { background: color-mix(in srgb, var(--green) 8%, transparent); }
+.month-columns button:focus-visible { z-index: 1; outline: 2px solid var(--focus-ring); outline-offset: 0; }
 .bar {
   position: absolute; bottom: 0; left: 50%; transform: translateX(-50%);
   display: flex; flex-direction: column-reverse; overflow: hidden;
@@ -187,7 +187,7 @@ watch(() => props.selectedMonth, async () => {
   position: absolute; left: 50%; width: 8px; height: 8px; transform: translate(-50%, -50%);
   border: 2px solid var(--chart-paid); border-radius: 50%; background: var(--surface);
 }
-.dot.deficit { border-color: #a24e38; }
+.dot.deficit { border-color: var(--danger-ink); }
 [aria-pressed="true"] .dot { width: 11px; height: 11px; box-shadow: 0 0 0 2px var(--surface); }
 .month-tick { position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%); font-size: .72rem; white-space: nowrap; }
 .month-columns .year-boundary { border-inline-start: 1px dashed var(--line); }
