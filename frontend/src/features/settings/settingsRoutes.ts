@@ -18,5 +18,6 @@ export const settingsRoutes: RouteRecordRaw[] = [
   { path: 'reset', name: 'settings-reset', component: ResetSettingsPage },
   { path: 'ai', name: 'settings-ai', component: AiSettingsPage },
   { path: 'pets', name: 'settings-pets', component: PetSettingsPage },
+  { path: 'reminders', name: 'settings-reminders', component: () => import('./ReminderTasksPage.vue') },
   { path: 'connections', name: 'settings-connections', component: ConnectionsSettingsPage },
 ]

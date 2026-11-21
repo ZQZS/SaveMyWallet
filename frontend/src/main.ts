@@ -9,6 +9,7 @@ import { summarize } from './domain/ledger'
 import './shared/styles/base.css'
 import { locale, t } from './i18n'
 import { themeVariables, useAppearance } from './features/appearance/appearance'
+import { startReminders } from './features/reminders/useReminders'
 
 const { style: appearance } = useAppearance()
 watchEffect(() => {
@@ -35,6 +36,9 @@ watchEffect(() => {
 })
 void router.isReady().then(() => {
   app.mount('#app')
+  const stopReminders = startReminders()
+  app.onUnmount(stopReminders)
+  if (import.meta.hot) import.meta.hot.dispose(stopReminders)
   if ('__TAURI_INTERNALS__' in window) {
     const stop = startAutoSync(sync, session, canRefresh)
     app.onUnmount(stop)

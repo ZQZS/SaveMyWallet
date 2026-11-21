@@ -3103,9 +3103,11 @@ dependencies = [
 
 [[package]]
 name = "save-my-wallet"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "base64 0.22.1",
+ "chrono",
+ "dirs",
  "image",
  "reqwest 0.12.28",
  "rusqlite",
@@ -3117,7 +3119,9 @@ dependencies = [
  "tauri-plugin-fs",
  "tempfile",
  "tokio",
+ "windows",
  "windows-sys 0.61.2",
+ "winreg",
 ]
 
 [[package]]

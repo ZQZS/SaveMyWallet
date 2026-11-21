@@ -37,6 +37,19 @@ pub(crate) struct ChatCharacter {
     opening: Option<String>,
 }
 
+impl ChatCharacter {
+    fn is_valid(&self) -> bool {
+        !self.name.trim().is_empty()
+            && self.name.chars().count() <= 128
+            && self.description.chars().count() <= 2000
+            && self.voice_sample.chars().count() <= 500
+            && self
+                .opening
+                .as_ref()
+                .is_none_or(|line| line.chars().count() <= 1000)
+    }
+}
+
 #[derive(Clone, Copy, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 enum Role {
@@ -149,15 +162,7 @@ fn chat_messages(
         _ => return Err(INVALID_INPUT.into()),
     };
     if !matches!(language, "zh-CN" | "en-US")
-        || character.is_some_and(|c| {
-            c.name.trim().is_empty()
-                || c.name.chars().count() > 128
-                || c.description.chars().count() > 2000
-                || c.voice_sample.chars().count() > 500
-                || c.opening
-                    .as_ref()
-                    .is_some_and(|line| line.chars().count() > 1000)
-        })
+        || character.is_some_and(|c| !c.is_valid())
         || facts.is_some_and(|facts| !facts.is_valid())
         || details.is_some_and(|details| !details.is_valid_for(facts))
         || !(1..=11).contains(&messages.len())
@@ -168,8 +173,14 @@ fn chat_messages(
 
     let ledger_context = if facts.is_some() { SHARED_LEDGER } else { "" };
     let actions = if actions_enabled { LEDGER_ACTIONS } else { "" };
-    let system =
+    let mut system =
         format!("{prompt}\n{ledger_context}\n{actions}\n回复语言 / Response language: {language}");
+    if actions_enabled {
+        let clock = chrono::Local::now()
+            .format("%Y-%m-%dT%H:%M:%S%:z (%A)")
+            .to_string();
+        system.push_str(&format!("\n设备本地时钟 / Device local time: {clock}"));
+    }
     let mut turns = vec![json!({"role":"system", "content":system})];
     for (index, message) in messages.iter().enumerate() {
         let (role, limit) = if index % 2 == 0 {
@@ -211,6 +222,7 @@ fn chat_messages(
 }
 
 pub(crate) mod agent;
+pub(crate) mod reminder;
 
 #[tauri::command]
 pub(crate) async fn ai_pet_chat(

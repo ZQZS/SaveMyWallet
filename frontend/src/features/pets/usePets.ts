@@ -1,8 +1,8 @@
 import { computed, readonly, ref, shallowRef } from 'vue'
-import { locale } from '../../i18n'
-import { builtinPets, type PetCharacter } from './catalog'
-import { parsePetCard, PetCardImportError } from './cardImport'
-import { petStorage, type SavedPetCard } from './petStorage'
+import { locale } from '../../i18n/index.ts'
+import { builtinPets, type PetCharacter } from './catalog.ts'
+import { parsePetCard, PetCardImportError } from './cardImport.ts'
+import { petStorage, type SavedPetCard } from './petStorage.ts'
 
 const preferenceKey = 'savemywallet.pets.preferences'
 const storageError = ref(false)
@@ -73,6 +73,14 @@ const characters = computed<PetCharacter[]>(() => {
   })]
 })
 const activePet = computed(() => characters.value.find(pet => pet.id === preferences.value.selectedId) ?? characters.value[0])
+
+export async function selectedPetForReminder(): Promise<PetCharacter> {
+  const selectedId = preferences.value.selectedId
+  if (selectedId.startsWith('imported-')) {
+    try { await loadCards() } catch { /* The built-in companion also works without local storage. */ }
+  }
+  return characters.value.find(pet => pet.id === selectedId) ?? characters.value[0]
+}
 
 function setEnabled(value: boolean) {
   preferences.value.enabled = value

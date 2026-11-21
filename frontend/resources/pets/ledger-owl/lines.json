@@ -1,6 +1,7 @@
 {
   "zh-CN": {
     "name": "账房鸮",
+    "reminderLine": "到点了。请过目。",
     "description": "干练、惜字如金，说起账来总把数字放前头。",
     "greetings": [
       "在。看哪月？",
@@ -12,6 +13,7 @@
   },
   "en-US": {
     "name": "Ledger Owl",
+    "reminderLine": "Right on time. Your reminder is here.",
     "description": "A concise bookkeeper. Figures first.",
     "greetings": [
       "Present. Which month?",

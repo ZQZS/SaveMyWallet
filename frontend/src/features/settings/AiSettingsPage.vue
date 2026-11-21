@@ -115,6 +115,7 @@ onBeforeRouteLeave(() => action.value !== 'save' && action.value !== 'remove')
       <h2 id="ai-requests">{{ t('aiSettings.requests') }}</h2>
       <ul class="ai-requests settings-muted">
         <li>{{ t('aiSettings.reminder') }}</li>
+        <li>{{ t('aiSettings.petReminder') }}</li>
         <li>{{ t('aiSettings.image') }}</li>
         <li>{{ t('aiSettings.scenario') }}</li>
         <li>{{ t('aiSettings.notice') }}</li>

@@ -1,6 +1,7 @@
 mod ai;
 mod backup_files;
 mod ledger;
+mod reminders;
 mod sync_client;
 
 use ledger::review::{LedgerWrite, ReviewedLedger};
@@ -190,13 +191,21 @@ fn reset_ledger(db: State<'_, Database>, confirmation: String) -> Result<(), Str
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let context = tauri::generate_context!();
+    #[cfg(windows)]
+    if let Some(result) = reminders::windows::deliver_from_args(context.config()) {
+        std::process::exit(if result.is_ok() { 0 } else { 1 });
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(ai::credentials::init())
+        .plugin(reminders::init())
         .manage(ai::AiRequests::default())
         .manage(ai::images::SelectedImage::default())
         .setup(|app| {
+            #[cfg(windows)]
+            reminders::windows::purge_expired(app.config());
             app.manage(sync_client::SyncClient::default());
             app.manage(Database {
                 directory: app.path().app_data_dir()?,
@@ -205,6 +214,9 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            reminders::reminder_notify,
+            reminders::reminder_schedule,
+            reminders::reminder_cancel,
             ai::credentials::ai_key_status,
             ai::credentials::ai_save_key,
             ai::credentials::ai_remove_key,
@@ -213,6 +225,7 @@ pub fn run() {
             ai::spending::ai_classify_spending,
             ai::pet_chat::ai_pet_chat,
             ai::pet_chat::agent::ai_agent_chat_turn,
+            ai::pet_chat::reminder::ai_pet_reminder_line,
             ai::ai_parse_scenario,
             ai::assistant_inputs::ai_parse_notice,
             ai::assistant_inputs::ai_parse_search,
@@ -247,6 +260,6 @@ pub fn run() {
             sync_client::sync_disconnect,
             sync_client::sync_previous_backup
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("无法启动 SaveMyWallet");
 }

@@ -15,6 +15,7 @@ export interface PetCharacter {
   greetAvatar?: string
   greetings: string[]
   dialogueExample?: string
+  reminderLine?: string
   preview: string
   lowBalance?: string
   pendingEstimates?: string

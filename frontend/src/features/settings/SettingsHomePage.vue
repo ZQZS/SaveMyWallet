@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Archive, Bot, Cable, ChevronRight, Languages, Palette, PawPrint, RotateCcw, UserRound } from 'lucide-vue-next'
+import { Archive, BellRing, Bot, Cable, ChevronRight, Languages, Palette, PawPrint, RotateCcw, UserRound } from 'lucide-vue-next'
 import { RouterLink } from 'vue-router'
 import { languageOptions, locale, t } from '../../i18n'
 import { usePets } from '../pets/usePets'
@@ -22,6 +22,7 @@ const sections = [
   { key: 'extensions', links: [
     { name: 'settings-ai', key: 'ai', icon: Bot },
     { name: 'settings-pets', key: 'pets', icon: PawPrint },
+    { name: 'settings-reminders', key: 'reminders', icon: BellRing },
   ] },
 ] as const
 </script>

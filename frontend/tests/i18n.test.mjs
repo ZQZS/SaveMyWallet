@@ -13,6 +13,7 @@ import { noticeMessages } from '../src/i18n/messages/notice.ts'
 import { petsLedgerMessages } from '../src/i18n/messages/petsLedger.ts'
 import { petsPickerMessages } from '../src/i18n/messages/petsPicker.ts'
 import { petsChatMessages } from '../src/i18n/messages/petsChat.ts'
+import { reminderMessages } from '../src/i18n/messages/reminders.ts'
 
 function parameters(text) {
   return [...new Set([...text.matchAll(/\{(\w+)\}/g)].map(match => match[1]))].sort()
@@ -20,7 +21,7 @@ function parameters(text) {
 
 test('两个语言目录对每个界面消息使用相同的键和参数', () => {
   const allKeys = new Set()
-  for (const group of [appMessages, formsMessages, ledgerMessages, settingsMessages, aiErrorMessages, aiMonthMessages, billImageMessages, ledgerSearchMessages, noticeMessages, petsLedgerMessages, petsPickerMessages, petsChatMessages]) {
+  for (const group of [appMessages, formsMessages, ledgerMessages, settingsMessages, aiErrorMessages, aiMonthMessages, billImageMessages, ledgerSearchMessages, noticeMessages, petsLedgerMessages, petsPickerMessages, petsChatMessages, reminderMessages]) {
     assert.deepEqual(Object.keys(group['en-US']).sort(), Object.keys(group['zh-CN']).sort())
     for (const [key, chinese] of Object.entries(group['zh-CN'])) {
       assert.ok(!allKeys.has(key), 'Duplicate translation key: ' + key)

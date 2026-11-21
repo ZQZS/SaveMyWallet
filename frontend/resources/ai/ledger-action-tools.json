@@ -106,5 +106,51 @@
         "overrideSalaryCents": { "type": ["integer", "null"], "minimum": 0, "maximum": 99999999900 }
       }
     }
+  },
+  {
+    "name": "show_pet_popup",
+    "description": "Show a pet pop-up inside the app now. Only include a subject if supplied by the user.",
+    "requiresSelection": false,
+    "parameters": {
+      "type": "object", "additionalProperties": false,
+      "properties": { "text": { "type": "string", "maxLength": 300 } }
+    }
+  },
+  {
+    "name": "send_pet_notification",
+    "description": "Send a system notification from the pet now. Only include a subject if supplied by the user.",
+    "requiresSelection": false,
+    "parameters": {
+      "type": "object", "additionalProperties": false,
+      "properties": { "text": { "type": "string", "maxLength": 300 } }
+    }
+  },
+  {
+    "name": "schedule_pet_popup",
+    "description": "Schedule one in-app pet pop-up. Use exactly one of delaySeconds (from the request) or atLocal (device local YYYY-MM-DDTHH:mm). Only include a subject if supplied by the user.",
+    "requiresSelection": false,
+    "parameters": {
+      "type": "object", "additionalProperties": false,
+      "oneOf": [{ "required": ["delaySeconds"] }, { "required": ["atLocal"] }],
+      "properties": {
+        "delaySeconds": { "type": "integer", "minimum": 1 },
+        "atLocal": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}$" },
+        "text": { "type": "string", "maxLength": 300 }
+      }
+    }
+  },
+  {
+    "name": "schedule_pet_notification",
+    "description": "Schedule one system notification from the pet. Use exactly one of delaySeconds (from the request) or atLocal (device local YYYY-MM-DDTHH:mm). Only include a subject if supplied by the user.",
+    "requiresSelection": false,
+    "parameters": {
+      "type": "object", "additionalProperties": false,
+      "oneOf": [{ "required": ["delaySeconds"] }, { "required": ["atLocal"] }],
+      "properties": {
+        "delaySeconds": { "type": "integer", "minimum": 1 },
+        "atLocal": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}$" },
+        "text": { "type": "string", "maxLength": 300 }
+      }
+    }
   }
 ]

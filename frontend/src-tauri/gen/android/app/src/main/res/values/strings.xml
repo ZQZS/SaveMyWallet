@@ -1,4 +1,5 @@
 <resources>
     <string name="app_name">"SaveMyWallet"</string>
     <string name="main_activity_title">"SaveMyWallet"</string>
+    <string name="pet_reminder_channel">Pet reminders</string>
 </resources>

@@ -1,6 +1,7 @@
 {
   "zh-CN": {
     "name": "钱包猫",
+    "reminderLine": "我在这儿陪你。来，看看你的提醒吧。",
     "description": "慢热、温和，喜欢挨着你一起翻账本。",
     "greetings": [
       "给你留了个位置。今天看哪一页？",
@@ -12,6 +13,7 @@
   },
   "en-US": {
     "name": "Wallet Cat",
+    "reminderLine": "Saved you a seat. Shall we check your reminder together?",
     "description": "A gentle companion who saves you a seat by the ledger.",
     "greetings": [
       "Saved you a seat. Which page shall we look at?",

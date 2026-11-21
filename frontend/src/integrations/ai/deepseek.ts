@@ -75,6 +75,10 @@ export interface PetChatInput {
   details?: PetChatDetails
 }
 
+export function generatePetReminderLine(character: PetChatInput['character'], subject: string, language: AppLocale, signal: AbortSignal) {
+  return request<string>('ai_pet_reminder_line', { character, subject, language }, signal)
+}
+
 export function requestAgentTurn(input: AgentChatInput, toolRounds: ToolRound[], actionToolsEnabled: boolean, signal?: AbortSignal) {
   return request<AgentTurn>('ai_agent_chat_turn', { ...input, toolRounds, actionToolsEnabled }, signal)
 }

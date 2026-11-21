@@ -2,16 +2,19 @@ import { shallowRef } from 'vue'
 import type { LedgerSession } from '../../app/ledgerSession.ts'
 import { displayError, t } from '../../i18n/index.ts'
 import type { LedgerActionResult, RunLedgerAction } from '../../integrations/ai/agentChat.ts'
+import { isReminderAction, prepareReminderAction, type CreateReminder, type ReminderActionName } from '../reminders/reminderActions.ts'
 import { createLedgerActionScope, type PreparedLedgerAction } from './ledgerActions.ts'
 
-export function useLedgerActionReview(session: LedgerSession) {
-  const review = shallowRef<PreparedLedgerAction | null>(null)
+type ActionPreview = { name: PreparedLedgerAction['name'] | ReminderActionName; lines: string[] }
+
+export function useLedgerActionReview(session: LedgerSession, createReminder?: CreateReminder) {
+  const review = shallowRef<ActionPreview | null>(null)
   let decide: ((approved: boolean) => void) | undefined
 
   function confirm() { decide?.(true) }
   function decline() { decide?.(false) }
 
-  function ask(action: PreparedLedgerAction, signal: AbortSignal): Promise<boolean> {
+  function ask(action: ActionPreview, signal: AbortSignal): Promise<boolean> {
     return new Promise(resolve => {
       if (signal.aborted || decide) return resolve(false)
       const abort = () => finish(false)
@@ -29,11 +32,18 @@ export function useLedgerActionReview(session: LedgerSession) {
 
   function forTurn(month: string, selectedIds: readonly string[]): RunLedgerAction {
     const scope = createLedgerActionScope(session, month, selectedIds)
+    const requestedAt = Date.now()
     return async (name, args, signal): Promise<LedgerActionResult> => {
       const action = t('chat.action.' + name)
       const cancelled = () => ({ status: 'cancelled' as const, message: t('chat.action.cancelled', { action }) })
       if (signal.aborted) return cancelled()
       try {
+        if (isReminderAction(name)) {
+          if (!createReminder) throw new Error('REMINDER_STORAGE')
+          const prepared = prepareReminderAction(name, args, requestedAt)
+          if (!await ask(prepared, signal) || signal.aborted) return cancelled()
+          return { status: 'applied', message: await prepared.apply(createReminder) }
+        }
         const prepared = scope.prepare(name, args)
         if (!await ask(prepared, signal) || signal.aborted) return cancelled()
         const status = await prepared.apply()

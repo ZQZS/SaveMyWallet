@@ -6,6 +6,7 @@ import { contentText } from '@earendil-works/pi-ai/utils/text'
 import { validateToolCall } from '@earendil-works/pi-ai/utils/validation'
 import actionDefinitions from '../../../resources/ai/ledger-action-tools.json' with { type: 'json' }
 import type { LedgerActionName } from '../../features/ai/ledgerActions.ts'
+import { isReminderAction, type ReminderActionName } from '../../features/reminders/reminderActions.ts'
 import { petChatDetailsPayload, type PetChatDetails } from '../../features/pets/petChatDetails.ts'
 import { requestAgentTurn, type PetChatInput } from './deepseek.ts'
 
@@ -29,7 +30,8 @@ export interface LedgerActionResult {
 }
 
 // This local callback owns the selection IDs and user confirmation. The IPC request carries only the enabled flag.
-export type RunLedgerAction = (name: LedgerActionName, args: Record<string, unknown>, signal: AbortSignal) => Promise<LedgerActionResult>
+type ChatActionName = LedgerActionName | ReminderActionName
+export type RunLedgerAction = (name: ChatActionName, args: Record<string, unknown>, signal: AbortSignal) => Promise<LedgerActionResult>
 
 const model = DEEPSEEK_MODELS['deepseek-flash']
 
@@ -123,15 +125,18 @@ export async function chatWithAgent(input: AgentChatInput, signal: AbortSignal, 
         async execute(_id, inputArgs) {
           if (signal.aborted) throw new Error('AI_CANCELLED')
           const args = inputArgs as Record<string, unknown>
-          // Tool-call IDs can differ when the model repeats an action. Row order does not change its effect.
-          const fields = Object.keys(args).sort().map(key => {
-            const value = args[key]
+          // The provider may repeat a call with a different ID, shuffled rows, or a blank subject.
+          const normalized = isReminderAction(definition.name)
+            ? { ...args, text: typeof args.text === 'string' ? args.text.trim() : '' }
+            : args
+          const fields = Object.keys(normalized).sort().map(key => {
+            const value = normalized[key]
             return [key, key === 'rows' && Array.isArray(value) ? [...value].sort((a, b) => a - b) : value]
           })
           const key = JSON.stringify([definition.name, fields])
           let result = receipts.get(key)
           if (!result) {
-            result = await runAction(definition.name as LedgerActionName, args, signal)
+            result = await runAction(definition.name as ChatActionName, args, signal)
             receipts.set(key, result)
           }
           return { content: [{ type: 'text', text: result.status }], details: undefined, terminate: true }

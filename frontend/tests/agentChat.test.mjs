@@ -175,3 +175,39 @@ test('a malformed sibling call never partially applies its batch; an intentional
   assert.equal(await chatWithAgent(input, new AbortController().signal, runAction), '已更新预算。')
   assert.equal(reviewed, 1)
 })
+
+test('both chat modes expose all pet reminders without ledger sharing and finish with local receipts', async () => {
+  const cases = [
+    ['show_pet_popup', {}],
+    ['send_pet_notification', { text: '带钥匙' }],
+    ['schedule_pet_popup', { delaySeconds: 600 }],
+    ['schedule_pet_notification', { atLocal: '2030-06-11T09:05' }],
+  ]
+  for (const input of [general, { ...general, mode: 'pet', character: { name: 'Fox', description: '', voiceSample: '' } }]) {
+    let requests = 0
+    mockIPC((_command, payload) => {
+      requests++
+      assert.equal(payload.details, undefined)
+      assert.equal(payload.facts, undefined)
+      const duplicate = ['schedule_pet_popup', { delaySeconds: 600, text: '  ' }]
+      return { text: '', calls: [...cases, duplicate].map(([name, args], i) => ({ id: 'remind' + i, name, arguments: args })) }
+    })
+    const reviewed = []
+    const answer = await chatWithAgent(input, new AbortController().signal, async (name, args) => {
+      reviewed.push([name, args])
+      return { status: 'applied', message: 'saved ' + name }
+    })
+    assert.deepEqual(reviewed, cases)
+    assert.equal(answer, cases.map(([name]) => 'saved ' + name).join('\n'))
+    assert.equal(requests, 1)
+  }
+})
+
+test('inconsistent and recurring reminder tool arguments cannot start a write', async () => {
+  for (const args of [{}, { atLocal: '2030-06-11T09:05', delaySeconds: 60 }, { delaySeconds: 60, repeat: 'daily' }]) {
+    mockIPC(() => ({ text: '', calls: [{ id: 'schedule', name: 'schedule_pet_popup', arguments: args }] }))
+    let reviews = 0
+    await assert.rejects(chatWithAgent(general, new AbortController().signal, async () => { reviews++ }), /AI_BAD_RESPONSE/)
+    assert.equal(reviews, 0)
+  }
+})

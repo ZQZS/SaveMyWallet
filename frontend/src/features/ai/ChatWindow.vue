@@ -10,12 +10,14 @@ import type { PetCharacter } from '../pets/catalog'
 import PetChatDetailPicker from '../pets/PetChatDetailPicker.vue'
 import { petChatDetailOptions, selectedPetChatDetails, selectedPetChatOptions } from '../pets/petChatDetails'
 import { MAX_PET_MESSAGE_LENGTH, useGeneralChat, usePetChat } from '../pets/usePetChat'
+import { useReminders } from '../reminders/useReminders'
 import { useLedgerActionReview } from './useLedgerActionReview'
 
 const props = defineProps<{ pet?: PetCharacter; month: string; totals: MonthlySummary; floor: number }>()
 const emit = defineEmits<{ close: [] }>()
 const session = useLedgerSession()
-const { review, confirm, decline, forTurn } = useLedgerActionReview(session)
+const reminders = useReminders()
+const { review, confirm, decline, forTurn } = useLedgerActionReview(session, input => reminders.create({ ...input, pet: props.pet }))
 const { messages, draft, pending, error, send, stop, conversations, activeConversationId, newChat, selectChat } =
   props.pet ? usePetChat(props.pet, props.month) : useGeneralChat(props.month)
 const speaker = computed(() => props.pet?.name ?? t('chat.assistant'))

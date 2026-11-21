@@ -103,6 +103,7 @@ fn general_chat_handles_long_replies_and_their_followups_without_persona_or_ledg
         chat_messages(ChatMode::General, None, &history, "en-US", None, None, true).unwrap();
     let system = messages[0]["content"].as_str().unwrap();
     assert!(system.contains("通用聊天助手"));
+    assert!(system.contains("Device local time: "));
     assert!(!system.contains("dueCents"));
     let last: Value = serde_json::from_str(messages[3]["content"].as_str().unwrap()).unwrap();
     assert_eq!(last, json!({"message":"How would it end?"}));
@@ -118,6 +119,14 @@ fn action_tools_are_offered_by_scope_and_only_declared_calls_return_to_pi() {
     assert!(names.contains(&"create_platform"));
     assert!(names.contains(&"create_bill"));
     assert!(names.contains(&"update_budget"));
+    for name in [
+        "show_pet_popup",
+        "send_pet_notification",
+        "schedule_pet_popup",
+        "schedule_pet_notification",
+    ] {
+        assert!(names.contains(&name));
+    }
     assert!(!names.contains(&"mark_bills_paid"));
     assert!(!names.contains(&INSPECT));
     let wire = |name, args: Value| {
@@ -130,6 +139,9 @@ fn action_tools_are_offered_by_scope_and_only_declared_calls_return_to_pi() {
         )
     };
     let action = wire("mark_bills_paid", json!({"rows":[1]}));
+    let reminder = wire("schedule_pet_popup", json!({"delaySeconds":600}));
+    assert!(parse_reply(&reminder, ChatMode::Pet, &no_rows).is_ok());
+    assert!(parse_reply(&reminder, ChatMode::Pet, &read_only).is_err());
     assert!(parse_reply(&action, ChatMode::General, &read_only).is_err());
     assert!(parse_reply(&action, ChatMode::General, &no_rows).is_err());
     let accepted = parse_reply(&action, ChatMode::General, &all).unwrap();
@@ -147,6 +159,7 @@ fn action_tools_are_offered_by_scope_and_only_declared_calls_return_to_pi() {
         wire("mark_bills_paid", json!({"ids":["private-id"]})),
         wire("reset_ledger", json!({})),
         wire("void_bills", json!("all")),
+        wire("schedule_pet_notification", json!({"recurrence":"daily"})),
     ] {
         assert!(parse_reply(&invalid, ChatMode::Pet, &all).is_err());
     }

@@ -42,6 +42,7 @@ Windows 和安卓共用 Vue、TypeScript、Tauri 2 和 Rust 代码，每台设�
 | `src-tauri/src/` | `lib.rs` 注册命令并管理连接。`ledger.rs` 验证、查询、写事务。`schema_v1.sql` 定义首版表结构。 |
 | `src-tauri/gen/android/`、`src-tauri/capabilities/`、`src-tauri/icons/` | 安卓 Gradle 工程、Tauri 权限与打包图标。两端共用的账务逻辑位于 `src/` 和 Rust 模块。 |
 | `src/features/pets/`、`resources/pets/` | 内置角色图包和台词、选择与展示组件、酒馆角色卡解析及本机存储。详见[桌宠与角色卡](pets.md)。 |
+| `src/features/reminders/` | 桌宠提醒文案、设备本地任务列表、前台弹窗队列及原生系统通知接口。设置页与聊天动作共用此模块。 |
 | `src/integrations/ai/`、`src-tauri/src/ai/`、`resources/ai/` | 前端运行 Pi Agent Core，按本轮勾选范围查账。账务修改先预览，再由账本会话写入。Rust 使用设备凭据向 DeepSeek 请求回复或工具调用，两端使用同一份账务动作定义。[动作目录](../resources/ai/ledger-action-tools.json) · [使用示例](ai-features.md#在聊天里改账) |
 | `tests/`、`src-tauri/src/ledger/tests.rs` | 前端业务、会话和扩展契约回归。原生 SQLite 写入、重开和事务回归。 |
 | `docs/`、`dist/`、`src-tauri/target/`、`release/` | 项目文档、Vite 构建结果、Cargo 构建结果和供安装的交付物。修改功能时编辑源目录，再生成对应产物。 |

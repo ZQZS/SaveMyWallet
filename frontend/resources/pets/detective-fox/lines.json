@@ -1,6 +1,7 @@
 {
   "zh-CN": {
     "name": "侦探狐",
+    "reminderLine": "搭档，留给你的提醒到了。要一起看看吗？",
     "description": "好奇、爱追线索，总想知道下一页藏着什么。",
     "greetings": [
       "你来啦。今天从哪条线索查起？",
@@ -12,6 +13,7 @@
   },
   "en-US": {
     "name": "Detective Fox",
+    "reminderLine": "Partner, a reminder just turned up. Shall we take a look?",
     "description": "An inquisitive sleuth who follows each entry like a clue.",
     "greetings": [
       "Ah, my partner. Which lead do we follow today?",
