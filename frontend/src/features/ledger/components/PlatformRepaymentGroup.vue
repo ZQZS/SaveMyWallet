@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { ChevronDown } from 'lucide-vue-next'
-import { estimateTotalCents, type Entry, type PlatformGroup } from '../../../domain/ledger'
+import type { Entry, PlatformGroup } from '../../../domain/ledger'
 import { formatMoney, t } from '../../../i18n'
+import BillEntryDescription from '../../../shared/components/BillEntryDescription.vue'
+import { entryStatusLabel } from '../../../shared/entryStatusLabel'
 
 const props = defineProps<{ group: PlatformGroup; expanded: boolean; busy: boolean; linkedId?: string }>()
 const emit = defineEmits<{
@@ -42,13 +44,6 @@ function changePayment() {
   emit('pay', selected.map(entry => entry.id), paid)
 }
 
-function entryDescription(entry: Entry) {
-  if (entry.kind === 'installment') {
-    return t('ledger.installment', { index: entry.installmentIndex ?? '—', count: entry.installmentCount ?? '—' })
-  }
-  if (entry.kind === 'estimate') return t(entry.status === 'estimated' ? 'ledger.estimate' : 'ledger.confirmedEstimate')
-  return t('ledger.singlePayment')
-}
 </script>
 
 <template>
@@ -81,17 +76,13 @@ function entryDescription(entry: Entry) {
       <li v-for="entry in group.entries" :key="entry.id" class="entry"
         :class="{ 'is-voided': entry.voided, 'linked-entry': linkedId === entry.id }"
         :aria-current="linkedId === entry.id ? 'true' : undefined" :tabindex="linkedId === entry.id ? -1 : undefined">
-        <span class="entry-title"><strong>{{ entry.title }}</strong><small>{{ entryDescription(entry) }}</small>
-          <small v-if="entry.kind === 'estimate'">{{ t('ledger.estimateBreakdown', {
-            total: formatMoney(estimateTotalCents(entry)), deposit: formatMoney(entry.depositCents ?? 0),
-          }) }}</small>
-        </span>
+        <BillEntryDescription :entry="entry" />
         <strong class="entry-amount"><small v-if="entry.kind === 'estimate'">{{ t('ledger.balancePayment') }} </small>{{ formatMoney(entry.amountCents) }}</strong>
-        <span v-if="entry.voided" class="entry-state">{{ t('ledger.voided') }}</span>
-        <button v-else-if="entry.status === 'estimated'" class="entry-action confirm-action" type="button" :disabled="busy"
+        <button v-if="!entry.voided && entry.status === 'estimated'" class="entry-action confirm-action" type="button" :disabled="busy"
           :aria-label="t('ledger.confirmBill', { title: entry.title })" @click="emit('confirm', entry)">{{ t('ledger.confirmEstimate') }}</button>
-        <span v-else-if="entry.kind === 'estimate' && entry.amountCents === 0" class="entry-state is-paid">{{ t('ledger.noBalancePayment') }}</span>
-        <span v-else class="entry-state" :class="{ 'is-paid': entry.status === 'paid' }">{{ t(entry.status === 'paid' ? 'ledger.paid' : 'ledger.unpaid') }}</span>
+        <span v-else class="entry-state" :class="{ 'is-paid': !entry.voided && (entry.status === 'paid' || (entry.kind === 'estimate' && entry.amountCents === 0)) }">
+          {{ entryStatusLabel(entry) }}
+        </span>
         <button class="entry-action void-action" type="button" :disabled="busy"
           :aria-haspopup="entry.kind === 'installment' ? 'dialog' : undefined"
           :aria-label="t(entry.voided ? 'ledger.restoreBill' : 'ledger.voidBill', { title: entry.title })"
@@ -146,9 +137,9 @@ function entryDescription(entry: Entry) {
 .platform-mark[data-tone="2"] { background: #e2edf7; color: #305c83; }
 .platform-mark[data-tone="3"] { background: #f6e5eb; color: #8b4165; }
 .platform-mark[data-tone="4"] { background: #edebf6; color: #5f5188; }
-.platform-label, .entry-title { display: grid; min-width: 0; gap: 3px; overflow-wrap: anywhere; }
-.platform-label strong, .entry-title strong { font-weight: 650; }
-.platform-label small, .entry-title small { color: var(--sub); font-size: 0.78rem; }
+.platform-label { display: grid; min-width: 0; gap: 3px; overflow-wrap: anywhere; }
+.platform-label strong { font-weight: 650; }
+.platform-label small { color: var(--sub); font-size: 0.78rem; }
 .group-total, .entry-amount {
   text-align: right;
   font-weight: 650;
@@ -172,7 +163,7 @@ function entryDescription(entry: Entry) {
 .entry-state, .entry-action { text-align: right; font-size: 0.8rem; }
 .entry-state { min-width: 48px; color: var(--sub); }
 .entry-state.is-paid { color: var(--green); }
-.is-voided .entry-title strong, .is-voided .entry-amount { color: var(--sub); text-decoration: line-through; }
+.is-voided .entry-amount { color: var(--sub); text-decoration: line-through; }
 .entry-action { justify-self: end; min-height: 44px; min-width: 44px; padding: 0 4px; font-weight: 650; background: transparent; border: 0; cursor: pointer; }
 .confirm-action, .is-voided .void-action { color: var(--green); }
 .void-action { color: var(--sub); }

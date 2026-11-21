@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { t } from '../../i18n'
-import { Plus, Wallet } from 'lucide-vue-next'
+import { ChevronRight, Plus, Wallet } from 'lucide-vue-next'
 import { useLedgerSession } from '../../app/ledgerSession'
 import { usePlatformCreation } from './usePlatformCreation'
 import '../../shared/styles/ledger-forms.css'
@@ -33,8 +33,11 @@ const counts = computed(() => {
       <div class="ledger-list-title"><h2 id="added-platforms">{{ t('forms.addedPlatforms') }}</h2><span>{{ t('forms.numberOfPlatforms', { count: ledger.platforms.length }) }}</span></div>
       <ul v-if="ledger.platforms.length">
         <li v-for="platform in ledger.platforms" :key="platform.id">
-          <span class="ledger-platform-symbol" aria-hidden="true"><Wallet :size="17" /></span>
-          <strong>{{ platform.name }}</strong><span>{{ t('forms.entryCount', { count: counts.get(platform.id) ?? 0 }) }}</span>
+          <RouterLink class="platform-link" :to="{ name: 'platform-details', params: { id: platform.id } }">
+            <span class="ledger-platform-symbol" aria-hidden="true"><Wallet :size="17" /></span>
+            <strong>{{ platform.name }}</strong><span>{{ t('forms.entryCount', { count: counts.get(platform.id) ?? 0 }) }}</span>
+            <ChevronRight :size="16" aria-hidden="true" />
+          </RouterLink>
         </li>
       </ul>
       <p v-else class="ledger-hint">{{ t('forms.platformsEmpty') }}</p>

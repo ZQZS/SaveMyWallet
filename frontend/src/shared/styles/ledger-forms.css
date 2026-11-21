@@ -43,7 +43,7 @@
   opacity: .6;
 }
 
-.ledger-editor :is(button, input, select):focus-visible {
+.ledger-editor :is(a, button, input, select):focus-visible {
   outline: 2px solid var(--green);
   outline-offset: 2px;
 }
@@ -208,18 +208,21 @@
 
 .ledger-platform-list { gap: 13px; }
 .ledger-platform-list ul { list-style: none; padding: 0; }
-.ledger-platform-list li {
+.ledger-platform-list li { border-top: 1px solid var(--line); }
+.ledger-platform-list .platform-link {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 11px;
   padding: 13px 0;
-  border-top: 1px solid var(--line);
+  color: var(--ink);
+  text-decoration: none;
 }
 
-.ledger-platform-list li:last-child { padding-bottom: 0; }
-.ledger-platform-list li strong { overflow-wrap: anywhere; font-size: .95rem; }
-.ledger-platform-list li > span:last-child,
+.platform-link:is(:hover, :focus-visible) strong { color: var(--green); text-decoration: underline; }
+.platform-link strong { overflow-wrap: anywhere; font-size: .95rem; }
+.platform-link > svg { color: var(--green); }
+.platform-link > span:not(.ledger-platform-symbol),
 .ledger-list-title > span { color: var(--sub); font-size: .8rem; }
 
 .ledger-platform-symbol {

@@ -1,6 +1,6 @@
 [package]
 name = "save-my-wallet"
-version = "0.4.4"
+version = "0.4.5"
 description = "SaveMyWallet 本地月度账本"
 edition = "2021"
 
