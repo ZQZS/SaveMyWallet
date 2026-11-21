@@ -83,15 +83,27 @@ impl DeepSeek {
         format: &str,
         max_tokens: u32,
     ) -> Result<String, String> {
+        let messages = [
+            json!({"role": "system", "content": instruction}),
+            json!({"role": "user", "content": input}),
+        ];
+        self.complete_messages(key, &messages, format, max_tokens)
+            .await
+    }
+
+    pub(super) async fn complete_messages(
+        &self,
+        key: &str,
+        messages: &[Value],
+        format: &str,
+        max_tokens: u32,
+    ) -> Result<String, String> {
         let body = json!({
             "model": "deepseek-flash",
             "thinking": {"type": "disabled"},
             "response_format": {"type": format},
             "max_tokens": max_tokens,
-            "messages": [
-                {"role": "system", "content": instruction},
-                {"role": "user", "content": input}
-            ]
+            "messages": messages
         });
         let request = self.http.post(format!("{}/chat/completions", self.origin));
         let result = response_json(request.bearer_auth(key).json(&body)).await?;

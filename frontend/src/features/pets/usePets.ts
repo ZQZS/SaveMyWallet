@@ -66,6 +66,7 @@ const characters = computed<PetCharacter[]>(() => {
     return {
       id: importedId(card.id), name: card.name, avatar: card.avatar, imported: true,
       description: [card.personality, card.description].filter(Boolean).map(personalize).join('\n'),
+      dialogueExample: card.dialogueExample && personalize(card.dialogueExample),
       greetings: greetings.length ? greetings : [fallback],
       preview: greetings[0] || fallback,
     }

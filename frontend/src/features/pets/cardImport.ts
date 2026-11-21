@@ -3,6 +3,7 @@ export interface ImportedPetCard {
   description: string
   personality: string
   greetings: string[]
+  dialogueExample?: string
   avatar?: Blob
 }
 
@@ -31,6 +32,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function plainText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+// Limit even large imported profiles by Unicode code point without splitting an emoji.
+export function clipCharacterText(text: string, limit: number): string {
+  return Array.from(text.slice(0, limit * 2)).slice(0, limit).join('')
 }
 
 function readCharacter(json: string): ImportedPetCard {
@@ -76,7 +82,10 @@ function readCharacter(json: string): ImportedPetCard {
       if (greetings.size > 256) throw new PetCardImportError('tooLarge')
     }
   }
-  return { name, description: displayText(data.description), personality: displayText(data.personality), greetings: [...greetings] }
+  const card: ImportedPetCard = { name, description: displayText(data.description), personality: displayText(data.personality), greetings: [...greetings] }
+  const sample = clipCharacterText(plainText(data.mes_example), 500)
+  if (sample) card.dialogueExample = clipCharacterText(sample.replace(/\{\{char\}\}|<char>|<bot>/gi, () => speaker), 500)
+  return card
 }
 
 function readPng(bytes: Uint8Array<ArrayBuffer>): ImportedPetCard {

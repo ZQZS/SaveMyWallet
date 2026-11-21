@@ -56,6 +56,22 @@ export function explainMonth(facts: ReminderFacts, language: AppLocale, signal?:
   return request<string>('ai_explain', { facts, language }, signal)
 }
 
+export interface PetChatMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export interface PetChatInput {
+  character: { name: string; description: string; voiceSample: string; opening?: string }
+  messages: PetChatMessage[]
+  language: AppLocale
+  facts?: ReminderFacts
+}
+
+export function chatWithPet(input: PetChatInput, signal: AbortSignal) {
+  return request<string>('ai_pet_chat', { ...input }, signal)
+}
+
 export function parseScenario(message: string, referenceMonth: string, signal?: AbortSignal) {
   return request<ScenarioDraft>('ai_parse_scenario', { message, referenceMonth }, signal)
 }

@@ -10,6 +10,7 @@ import { ledgerSearchMessages } from './messages/ledgerSearch.ts'
 import { noticeMessages } from './messages/notice.ts'
 import { petsLedgerMessages } from './messages/petsLedger.ts'
 import { petsPickerMessages } from './messages/petsPicker.ts'
+import { petsChatMessages } from './messages/petsChat.ts'
 
 export const languageOptions = [
   { value: 'zh-CN', label: '简体中文' },
@@ -21,10 +22,10 @@ const preferenceKey = 'savemywallet.locale'
 const catalogs: Record<AppLocale, Record<string, string>> = {
   'zh-CN': { ...appMessages['zh-CN'], ...formsMessages['zh-CN'], ...ledgerMessages['zh-CN'], ...settingsMessages['zh-CN'],
     ...aiErrorMessages['zh-CN'], ...aiMonthMessages['zh-CN'], ...billImageMessages['zh-CN'],
-    ...ledgerSearchMessages['zh-CN'], ...noticeMessages['zh-CN'], ...petsLedgerMessages['zh-CN'], ...petsPickerMessages['zh-CN'] },
+    ...ledgerSearchMessages['zh-CN'], ...noticeMessages['zh-CN'], ...petsLedgerMessages['zh-CN'], ...petsPickerMessages['zh-CN'], ...petsChatMessages['zh-CN'] },
   'en-US': { ...appMessages['en-US'], ...formsMessages['en-US'], ...ledgerMessages['en-US'], ...settingsMessages['en-US'],
     ...aiErrorMessages['en-US'], ...aiMonthMessages['en-US'], ...billImageMessages['en-US'],
-    ...ledgerSearchMessages['en-US'], ...noticeMessages['en-US'], ...petsLedgerMessages['en-US'], ...petsPickerMessages['en-US'] },
+    ...ledgerSearchMessages['en-US'], ...noticeMessages['en-US'], ...petsLedgerMessages['en-US'], ...petsPickerMessages['en-US'], ...petsChatMessages['en-US'] },
 }
 
 function savedLocale(): AppLocale {

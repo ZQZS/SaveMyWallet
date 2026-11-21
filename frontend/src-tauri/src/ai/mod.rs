@@ -2,6 +2,7 @@ pub(crate) mod assistant_inputs;
 pub(crate) mod credentials;
 mod deepseek;
 pub(crate) mod images;
+pub(crate) mod pet_chat;
 mod requests;
 
 use crate::ledger::{month_index, MAX_CENTS};
@@ -24,6 +25,14 @@ pub(crate) struct ReminderFacts {
     warning_floor_cents: i64,
 }
 
+impl ReminderFacts {
+    fn is_valid(&self) -> bool {
+        month_index(&self.month).is_ok()
+            && self.due_cents >= 0
+            && (0..=MAX_CENTS).contains(&self.warning_floor_cents)
+    }
+}
+
 #[tauri::command]
 pub(crate) async fn ai_test_key(app: AppHandle) -> Result<(), String> {
     DeepSeek::official()?
@@ -44,11 +53,7 @@ pub(crate) async fn ai_explain(
     facts: ReminderFacts,
     language: String,
 ) -> Result<String, String> {
-    if month_index(&facts.month).is_err()
-        || facts.due_cents < 0
-        || !(0..=MAX_CENTS).contains(&facts.warning_floor_cents)
-        || !matches!(language.as_str(), "zh-CN" | "en-US")
-    {
+    if !facts.is_valid() || !matches!(language.as_str(), "zh-CN" | "en-US") {
         return Err("AI_INVALID_INPUT".into());
     }
     requests

@@ -5,16 +5,18 @@ const dismissedReminders = new Map<string, 'lowBalance' | 'pendingEstimates'>()
 
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
-import { ArrowDown, Repeat2, X } from 'lucide-vue-next'
+import { ArrowDown, MessageCircle, Repeat2, X } from 'lucide-vue-next'
 import type { MonthlySummary } from '../../domain/ledger'
 import { formatMoney, formatMonth, locale, t } from '../../i18n'
 import PetPickerDialog from './PetPickerDialog.vue'
+import PetChatDialog from './PetChatDialog.vue'
 import { usePets } from './usePets'
 
 const props = defineProps<{ month: string; totals: MonthlySummary; floor: number }>()
 const emit = defineEmits<{ details: [] }>()
 const { enabled, ready, activePet } = usePets()
 const pickerOpen = ref(false)
+const chatOpen = ref(false)
 const petButton = ref<HTMLButtonElement | null>(null)
 const reminderHidden = ref(false)
 const greetingIndex = ref(-1)
@@ -101,17 +103,24 @@ function dismiss() {
         <X :size="16" aria-hidden="true" />
       </button>
     </div>
-    <button type="button" class="switch-pet" aria-haspopup="dialog" @click="pickerOpen = true">
-      <Repeat2 :size="16" aria-hidden="true" />{{ t('pets.ledger.switch') }}
-    </button>
+    <div class="pet-actions">
+      <button type="button" class="chat-button" aria-haspopup="dialog" @click="chatOpen = true">
+        <MessageCircle :size="16" aria-hidden="true" />{{ t('pets.chat.open') }}
+      </button>
+      <button type="button" class="switch-pet" aria-haspopup="dialog" @click="pickerOpen = true">
+        <Repeat2 :size="16" aria-hidden="true" />{{ t('pets.ledger.switch') }}
+      </button>
+    </div>
     <PetPickerDialog v-if="pickerOpen" @close="pickerOpen = false" />
+    <PetChatDialog v-if="chatOpen" :key="JSON.stringify([activePet.id, month])" :pet="activePet" :month="month"
+      :totals="totals" :floor="floor" @close="chatOpen = false" />
   </aside>
 </template>
 
 <style scoped>
 .ledger-pet { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 8px 16px; border: 1px solid var(--line); border-top: 0; border-radius: 0 0 16px 16px; }
 .ledger-pet button { color: var(--green); }
-.pet-identity, .switch-pet, .details-button, .dismiss { display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: 8px; background: transparent; }
+.pet-identity, .chat-button, .switch-pet, .details-button, .dismiss { display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: 8px; background: transparent; }
 .pet-identity { min-width: 0; max-width: 100%; padding: 2px 4px; text-align: start; }
 .pet-identity strong { max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .88rem; }
 .portrait { flex: none; display: grid; place-items: center; width: 48px; height: 48px; border-radius: 12px; font-weight: 700; }
@@ -123,7 +132,9 @@ function dismiss() {
 .bubble-content p { max-height: 12rem; overflow: auto; overflow-wrap: anywhere; white-space: pre-line; font-size: .88rem; line-height: 1.5; }
 .dismiss { flex: none; justify-content: center; width: 36px; height: 32px; }
 .details-button { padding: 4px 0; font-size: .8rem; font-weight: 650; }
-.switch-pet { flex: none; min-height: 40px; margin-inline-start: auto; padding: 4px 8px; font-size: .82rem; }
+.pet-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-inline-start: auto; }
+.switch-pet, .chat-button { min-height: 40px; padding: 4px 8px; font-size: .82rem; }
+.chat-button { background: var(--soft); font-weight: 650; }
 .switch-pet:hover, .pet-identity:hover, .dismiss:hover { background: var(--soft); }
 .details-button:hover { text-decoration: underline; }
 @media (max-width: 650px) {
@@ -131,7 +142,7 @@ function dismiss() {
   .pet-bubble { order: 1; flex-basis: 100%; max-width: 100%; margin-bottom: 4px; justify-content: space-between; }
 }
 @media (pointer: coarse) {
-  .dismiss, .switch-pet, .details-button { min-height: 44px; }
+  .dismiss, .switch-pet, .chat-button, .details-button { min-height: 44px; }
   .dismiss { width: 44px; }
 }
 @media (prefers-reduced-motion: no-preference) {

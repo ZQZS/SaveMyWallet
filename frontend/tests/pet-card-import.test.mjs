@@ -38,6 +38,8 @@ test('flat V1 JSON and nested V2/V3 cards retain authored text and only the supp
   assert.deepEqual(await parsePetCard(jsonFile(character)), {
     name: '猫头鹰🦉', description: '山里的会计', personality: '干练', greetings: ['我是 猫头鹰🦉。'],
   })
+  const withDialogue = await parsePetCard(jsonFile({ ...character, mes_example: '{{char}}：你好，{{user}}！' }))
+  assert.equal(withDialogue.dialogueExample, character.name + '：你好，{{user}}！')
   for (const version of [2, 3]) {
     const data = { ...character, nickname: '小账', alternate_greetings: ['你好，{{user}}', '', '你好，{{user}}', 5],
       avatar: 'https://example.org/image.png', assets: [{ type: 'icon', uri: 'https://example.org/other.png' }],
