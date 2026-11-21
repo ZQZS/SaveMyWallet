@@ -272,7 +272,11 @@ fn check_amount(cents: i64, minimum: i64) -> StorageResult<()> {
     Ok(())
 }
 
-fn check_entry_amount(kind: &str, amount_cents: i64, deposit_cents: i64) -> StorageResult<()> {
+pub(crate) fn check_entry_amount(
+    kind: &str,
+    amount_cents: i64,
+    deposit_cents: i64,
+) -> StorageResult<()> {
     if kind != "estimate" && deposit_cents != 0 {
         return Err("ESTIMATE_AMOUNTS_INVALID".into());
     }
@@ -295,7 +299,7 @@ fn check_bill_amount(
     Ok(())
 }
 
-fn bill_title(input: &str) -> StorageResult<&str> {
+pub(crate) fn bill_title(input: &str) -> StorageResult<&str> {
     let title = input.trim();
     if !(1..=120).contains(&title.chars().count()) || title.contains('\0') {
         return Err("请填写 1 到 120 个字的款项名称。".into());
@@ -303,7 +307,7 @@ fn bill_title(input: &str) -> StorageResult<&str> {
     Ok(title)
 }
 
-fn platform_name(name: &str) -> StorageResult<&str> {
+pub(crate) fn platform_name(name: &str) -> StorageResult<&str> {
     let name = name.trim();
     if !(1..=40).contains(&name.chars().count()) || name.contains('\0') {
         return Err("请填写 1 到 40 个字的平台名称。".into());

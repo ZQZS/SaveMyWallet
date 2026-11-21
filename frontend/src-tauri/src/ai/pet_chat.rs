@@ -1,4 +1,5 @@
 use super::{credentials, deepseek::DeepSeek, AiRequests, ReminderFacts};
+use crate::ledger::{bill_title, check_entry_amount, platform_name};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
@@ -31,11 +32,75 @@ pub(crate) struct ChatMessage {
     content: String,
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ChatEntry {
+    platform: String,
+    title: String,
+    kind: String,
+    status: String,
+    amount_cents: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    deposit_cents: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    installment_index: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    installment_count: Option<u32>,
+}
+
+impl ChatEntry {
+    fn is_valid(&self) -> bool {
+        let periods_valid = match (
+            self.kind.as_str(),
+            self.installment_index,
+            self.installment_count,
+        ) {
+            ("installment", Some(index), Some(count)) => {
+                (1..=120).contains(&count) && (1..=count).contains(&index)
+            }
+            ("single" | "estimate", None, None) => true,
+            _ => false,
+        };
+        let status_valid = match self.status.as_str() {
+            "estimated" => self.kind == "estimate",
+            "due" => self.amount_cents > 0,
+            "paid" => true,
+            _ => false,
+        };
+        periods_valid
+            && status_valid
+            && platform_name(&self.platform).is_ok_and(|name| name == self.platform)
+            && bill_title(&self.title).is_ok_and(|title| title == self.title)
+            && check_entry_amount(
+                &self.kind,
+                self.amount_cents,
+                self.deposit_cents.unwrap_or(0),
+            )
+            .is_ok()
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ChatMonthDetails {
+    month: String,
+    entries: Vec<ChatEntry>,
+}
+
+impl ChatMonthDetails {
+    fn is_valid_for(&self, facts: Option<&ReminderFacts>) -> bool {
+        facts.is_some_and(|summary| self.month == summary.month)
+            && !self.entries.is_empty()
+            && self.entries.iter().all(ChatEntry::is_valid)
+    }
+}
+
 fn provider_messages(
     character: &ChatCharacter,
     messages: &[ChatMessage],
     language: &str,
     facts: Option<&ReminderFacts>,
+    details: Option<&ChatMonthDetails>,
 ) -> Result<Vec<Value>, String> {
     if !matches!(language, "zh-CN" | "en-US")
         || character.name.trim().is_empty()
@@ -47,6 +112,7 @@ fn provider_messages(
             .as_ref()
             .is_some_and(|line| line.chars().count() > 1000)
         || facts.is_some_and(|facts| !facts.is_valid())
+        || details.is_some_and(|details| !details.is_valid_for(facts))
         || !(1..=11).contains(&messages.len())
         || messages.len() % 2 == 0
     {
@@ -80,6 +146,9 @@ fn provider_messages(
             if let Some(facts) = facts {
                 input["facts"] = json!(facts);
             }
+            if let Some(details) = details {
+                input["details"] = json!(details);
+            }
             turns.push(json!({"role":role, "content":input.to_string()}));
         } else {
             turns.push(json!({"role":role, "content":text}));
@@ -97,8 +166,15 @@ pub(crate) async fn ai_pet_chat(
     messages: Vec<ChatMessage>,
     language: String,
     facts: Option<ReminderFacts>,
+    details: Option<ChatMonthDetails>,
 ) -> Result<String, String> {
-    let turns = provider_messages(&character, &messages, &language, facts.as_ref())?;
+    let turns = provider_messages(
+        &character,
+        &messages,
+        &language,
+        facts.as_ref(),
+        details.as_ref(),
+    )?;
     requests
         .run(request_id, async move {
             let key = credentials::load(&app)?;
@@ -112,6 +188,9 @@ pub(crate) async fn ai_pet_chat(
         })
         .await
 }
+
+#[cfg(test)]
+mod detail_tests;
 
 #[cfg(test)]
 mod tests {
@@ -134,7 +213,7 @@ mod tests {
         .unwrap();
         let history = [message(Role::User, "刚才那句话是什么意思？")];
         let last_input = |profile: &ChatCharacter| -> Value {
-            let turns = provider_messages(profile, &history, "zh-CN", None).unwrap();
+            let turns = provider_messages(profile, &history, "zh-CN", None, None).unwrap();
             serde_json::from_str(turns[1]["content"].as_str().unwrap()).unwrap()
         };
         assert!(last_input(&profile)["character"].get("opening").is_none());
@@ -145,9 +224,9 @@ mod tests {
         assert_eq!(input["character"]["opening"], "线索就藏在门后。");
         assert_eq!(input["character"]["voiceSample"], "搭档，你好！");
         profile.opening = Some("🦊".repeat(1000));
-        assert!(provider_messages(&profile, &history, "en-US", None).is_ok());
+        assert!(provider_messages(&profile, &history, "en-US", None, None).is_ok());
         profile.opening = Some("🦊".repeat(1001));
-        assert!(provider_messages(&profile, &history, "en-US", None).is_err());
+        assert!(provider_messages(&profile, &history, "en-US", None, None).is_err());
     }
 
     fn message(role: Role, content: &str) -> ChatMessage {
@@ -166,7 +245,7 @@ mod tests {
             message(Role::Assistant, "搭档，你好！"),
             message(Role::User, " 这个月的结余是多少？ "),
         ];
-        let turns = provider_messages(&character, &history, "zh-CN", None).unwrap();
+        let turns = provider_messages(&character, &history, "zh-CN", None, None).unwrap();
         assert_eq!(turns.len(), 4);
         assert_eq!(turns[0]["role"], "system");
         assert!(!turns[0]["content"]
@@ -191,7 +270,7 @@ mod tests {
             due_cents: 245,
             warning_floor_cents: 0,
         };
-        let turns = provider_messages(&character, &history, "en-US", Some(&facts)).unwrap();
+        let turns = provider_messages(&character, &history, "en-US", Some(&facts), None).unwrap();
         let last: Value = serde_json::from_str(turns[3]["content"].as_str().unwrap()).unwrap();
         assert_eq!(
             last["facts"],
@@ -223,20 +302,20 @@ mod tests {
                 .collect(),
         ] {
             assert_eq!(
-                provider_messages(&character, &history, "zh-CN", None).unwrap_err(),
+                provider_messages(&character, &history, "zh-CN", None, None).unwrap_err(),
                 INVALID_INPUT
             );
         }
         let history = [user(&"🦊".repeat(1000))];
-        assert!(provider_messages(&character, &history, "en-US", None).is_ok());
-        assert!(provider_messages(&character, &history, "invalid", None).is_err());
+        assert!(provider_messages(&character, &history, "en-US", None, None).is_ok());
+        assert!(provider_messages(&character, &history, "invalid", None, None).is_err());
         let facts = ReminderFacts {
             month: "2026-13".into(),
             balance_cents: 0,
             due_cents: 0,
             warning_floor_cents: 0,
         };
-        assert!(provider_messages(&character, &history, "zh-CN", Some(&facts)).is_err());
+        assert!(provider_messages(&character, &history, "zh-CN", Some(&facts), None).is_err());
         let mut profile = json!(character);
         profile["system_prompt"] = json!("card instructions");
         assert!(serde_json::from_value::<ChatCharacter>(profile).is_err());
@@ -244,7 +323,7 @@ mod tests {
             voice_sample: "🦊".repeat(501),
             ..character
         };
-        assert!(provider_messages(&long_sample, &history, "en-US", None).is_err());
+        assert!(provider_messages(&long_sample, &history, "en-US", None, None).is_err());
         assert!(
             serde_json::from_value::<ChatMessage>(json!({"role":"system", "content":"role"}))
                 .is_err()

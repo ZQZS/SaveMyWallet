@@ -13,9 +13,9 @@ function openChat(t, character, request, selectedMonth = month) {
   return { ...chat, close: () => scope.stop() }
 }
 
-function ask(chat, question, facts) {
+function ask(chat, question, facts, details) {
   chat.draft.value = question
-  return chat.send('zh-CN', facts)
+  return chat.send('zh-CN', facts, details)
 }
 
 test('勾选只附四个汇总字段，取消勾选后历史中引用的金额留在本机', async t => {
@@ -138,4 +138,132 @@ test('长酒馆资料和用户消息按 Unicode 码点计数，只发送当前�
   assert.equal(await ask(fallback, '你好'), true)
   assert.equal(inputs[1].character.voiceSample, '首句')
   assert.ok(!Object.hasOwn(inputs[1].character, 'opening'))
+})
+
+test('同一个角色和月份可以保留多个聊天的独立草稿与上下文，重开继续当前聊天', async t => {
+  const character = { ...pet, id: 'separate-topics' }
+  const calls = []
+  const request = async input => { calls.push(input); return '回复' + calls.length }
+  const chat = openChat(t, character, request)
+  const first = chat.activeConversationId.value
+  assert.equal(typeof first, 'number')
+  assert.equal(await ask(chat, '第一段问题'), true)
+  chat.draft.value = '第一段草稿'
+  chat.newChat()
+  const second = chat.activeConversationId.value
+  assert.notEqual(first, second)
+  assert.deepEqual(chat.messages.value, [])
+  assert.equal(chat.draft.value, '')
+  assert.equal(await ask(chat, '第二段问题'), true)
+  assert.deepEqual(calls[1].messages, [{ role: 'user', content: '第二段问题' }])
+  chat.draft.value = '第二段草稿'
+  assert.deepEqual(new Set(chat.conversations.value.map(item => item.id)), new Set([first, second]))
+  assert.ok(chat.conversations.value.every(item => typeof item.title === 'string' && item.title.trim()))
+  chat.selectChat(first)
+  assert.equal(chat.draft.value, '第一段草稿')
+  assert.deepEqual(chat.messages.value.map(item => item.content), ['第一段问题', '回复1'])
+  assert.equal(await chat.send('zh-CN'), true)
+  assert.deepEqual(calls[2].messages.map(item => item.content), ['第一段问题', '回复1', '第一段草稿'])
+  chat.selectChat(second)
+  chat.close()
+  const reopened = openChat(t, character, request)
+  assert.equal(reopened.activeConversationId.value, second)
+  assert.equal(reopened.draft.value, '第二段草稿')
+  assert.deepEqual(reopened.messages.value.map(item => item.content), ['第二段问题', '回复2'])
+})
+
+test('新建或切换聊天会中止请求，迟到结果不会进入任一对话或覆盖草稿', async t => {
+  const calls = []
+  const chat = openChat(t, { ...pet, id: 'switch-while-pending' }, (_input, signal) => {
+    const deferred = Promise.withResolvers()
+    calls.push({ signal, ...deferred })
+    return deferred.promise
+  })
+  const first = chat.activeConversationId.value
+  const inFirst = ask(chat, '第一段待发送')
+  chat.newChat()
+  const second = chat.activeConversationId.value
+  assert.equal(calls[0].signal.aborted, true)
+  assert.equal(chat.pending.value, false)
+  const inSecond = ask(chat, '第二段待发送')
+  calls[0].resolve('第一段迟到回复')
+  assert.equal(await inFirst, false)
+  assert.equal(chat.pending.value, true)
+  chat.selectChat(first)
+  assert.equal(calls[1].signal.aborted, true)
+  assert.equal(chat.pending.value, false)
+  calls[1].reject(new Error('AI_NETWORK'))
+  assert.equal(await inSecond, false)
+  assert.equal(chat.error.value, '')
+  assert.deepEqual(chat.messages.value, [])
+  assert.equal(chat.draft.value, '第一段待发送')
+  chat.selectChat(second)
+  assert.deepEqual(chat.messages.value, [])
+  assert.equal(chat.draft.value, '第二段待发送')
+})
+
+test('明细要求同月汇总和非空选择，只发送所选行的展示字段', async t => {
+  const calls = []
+  const chat = openChat(t, { ...pet, id: 'detail-validation' }, async input => { calls.push(input); return '好。' })
+  const facts = { month, balanceCents: 75000, dueCents: 5000, warningFloorCents: 60000 }
+  const estimate = { platform: '平台甲', title: '待补款', kind: 'estimate', status: 'estimated', amountCents: 6000, depositCents: 1500 }
+  const installment = { platform: '平台乙', title: '分期', kind: 'installment', status: 'due', amountCents: 5000, installmentIndex: 2, installmentCount: 6 }
+  const details = { month, entries: [estimate, installment] }
+  for (const [summary, selection] of [
+    [undefined, details],
+    [{ ...facts, month: '2026-12' }, details],
+    [facts, { ...details, month: '2026-12' }],
+    [facts, { month, entries: [] }],
+  ]) {
+    assert.equal(await ask(chat, '核对明细', summary, selection), false)
+    assert.equal(chat.error.value, 'AI_INVALID_INPUT')
+  }
+  assert.equal(calls.length, 0)
+  const localEntries = details.entries.map(row => ({ ...row, id: '本地记录ID', notes: '私有备注' }))
+  assert.equal(await ask(chat, '核对明细', facts, { month, entries: localEntries, other: '额外字段' }), true)
+  assert.deepEqual(calls[0].details, details)
+  assert.deepEqual(calls[0].facts, facts)
+})
+
+test('相同明细选择允许追问，收窄到其他子集、汇总或关闭共享时排除之前的敏感历史', async t => {
+  const calls = []
+  const chat = openChat(t, { ...pet, id: 'detail-history' }, async input => {
+    calls.push(input)
+    return input.details ? input.details.entries.map(row => row.title).join('和') : '聊别的。'
+  })
+  const facts = { month, balanceCents: 20000, dueCents: 1000, warningFloorCents: 5000 }
+  const first = { platform: '平台甲', title: '合成条目甲', kind: 'single', status: 'due', amountCents: 600 }
+  const second = { platform: '平台甲', title: '合成条目乙', kind: 'single', status: 'due', amountCents: 400 }
+  const both = { month, entries: [first, second] }
+  const subset = { month, entries: [second] }
+  assert.equal(await ask(chat, '看这两笔', facts, both), true)
+  assert.equal(await ask(chat, '再解释一下', facts, structuredClone(both)), true)
+  assert.deepEqual(calls[1].messages.map(item => item.content), ['看这两笔', '合成条目甲和合成条目乙', '再解释一下'])
+  assert.equal(await ask(chat, '只看这一笔', facts, subset), true)
+  assert.deepEqual(calls[2].messages, [{ role: 'user', content: '只看这一笔' }])
+  assert.ok(!JSON.stringify(calls[2]).includes(first.title))
+  assert.equal(await ask(chat, '只聊汇总', facts), true)
+  assert.ok(!Object.hasOwn(calls[3], 'details'))
+  assert.deepEqual(calls[3].messages, [{ role: 'user', content: '只聊汇总' }])
+  assert.equal(await ask(chat, '再看一笔', facts, subset), true)
+  assert.equal(await ask(chat, '换个话题'), true)
+  assert.ok(!Object.hasOwn(calls[5], 'facts'))
+  assert.ok(!Object.hasOwn(calls[5], 'details'))
+  assert.deepEqual(calls[5].messages, [{ role: 'user', content: '换个话题' }])
+})
+
+test('扩大明细选择可继续追问，减少完全相同的账目笔数也会截断历史', async t => {
+  const calls = []
+  const chat = openChat(t, { ...pet, id: 'detail-multiplicity' }, async input => {
+    calls.push(input)
+    return '刚才选择了 ' + input.details.entries.length + ' 笔。'
+  })
+  const facts = { month, balanceCents: 90000, dueCents: 1600, warningFloorCents: 5000 }
+  const identical = { platform: '平台', title: '两条完全相同的账', kind: 'single', status: 'due', amountCents: 500 }
+  const another = { ...identical, title: '另一条账', amountCents: 600 }
+  assert.equal(await ask(chat, '看这两笔', facts, { month, entries: [identical, { ...identical }] }), true)
+  assert.equal(await ask(chat, '加一笔', facts, { month, entries: [another, identical, { ...identical }] }), true)
+  assert.deepEqual(calls[1].messages.map(item => item.content), ['看这两笔', '刚才选择了 2 笔。', '加一笔'])
+  assert.equal(await ask(chat, '从重复的两笔中取消一笔', facts, { month, entries: [identical, another] }), true)
+  assert.deepEqual(calls[2].messages, [{ role: 'user', content: '从重复的两笔中取消一笔' }])
 })

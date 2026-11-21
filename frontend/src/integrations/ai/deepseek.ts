@@ -3,6 +3,7 @@ import type { AppLocale } from '../../i18n/index.ts'
 import type { LedgerSearchFilters } from '../../features/ai/ledgerSearch.ts'
 import type { NoticeDraft } from '../../features/ai/noticeMatch.ts'
 import type { ReminderFacts } from './capabilities.ts'
+import type { PetChatDetails } from '../../features/pets/petChatDetails.ts'
 import { readBillDrafts } from './visionDrafts.ts'
 
 export interface SelectedAiImage {
@@ -66,6 +67,7 @@ export interface PetChatInput {
   messages: PetChatMessage[]
   language: AppLocale
   facts?: ReminderFacts
+  details?: PetChatDetails
 }
 
 export function chatWithPet(input: PetChatInput, signal: AbortSignal) {
