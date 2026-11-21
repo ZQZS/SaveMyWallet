@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Archive, Bot, Cable, ChevronRight, Languages, PawPrint, RotateCcw } from 'lucide-vue-next'
+import { Archive, Bot, Cable, ChevronRight, Languages, PawPrint, RotateCcw, UserRound } from 'lucide-vue-next'
 import { RouterLink } from 'vue-router'
 import { languageOptions, locale, t } from '../../i18n'
 import { usePets } from '../pets/usePets'
@@ -7,7 +7,10 @@ import { usePets } from '../pets/usePets'
 const { enabled, activePet, ready } = usePets()
 
 const sections = [
-  { key: 'general', links: [{ name: 'settings-language', key: 'language', icon: Languages }] },
+  { key: 'general', links: [
+    { name: 'settings-language', key: 'language', icon: Languages },
+    { name: 'settings-author', key: 'author', icon: UserRound },
+  ] },
   { key: 'data', links: [
     { name: 'settings-connections', key: 'connections', icon: Cable },
     { name: 'settings-backup', key: 'backup', icon: Archive },
