@@ -91,6 +91,130 @@ fn unique_entry(db: &Database, title: &str) -> Value {
     entry
 }
 
+fn reviewed_revision(db: &Database) -> String {
+    let review = db.access(ledger::review::snapshot).unwrap();
+    serde_json::to_value(review).unwrap()["revision"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+async fn sync_without_conflicts(client: &SyncClient, db: &Database) {
+    let state = client.run(db).await.unwrap_or_else(|error| {
+        let pending = db.access(|conn| ledger::sync::next(conn)).unwrap();
+        panic!("Test replica failed to sync: {error}. Pending synthetic operation: {pending:?}")
+    });
+    assert_eq!(state["pending"], 0, "{state}");
+    assert_eq!(state["conflicts"], json!([]), "{state}");
+}
+
+fn undo_published_action(db: &Database, action: &str) {
+    let ticket = db.access(ledger::ai_undo::preview).unwrap().unwrap();
+    let ticket = serde_json::to_value(ticket).unwrap();
+    assert_eq!(ticket["action"], action);
+    assert_eq!(ticket["blocked"], false, "{ticket}");
+    assert_eq!(ticket["entryCount"], 1);
+    db.access(|conn| ledger::ai_undo::apply(conn, ticket["token"].as_str().unwrap()))
+        .unwrap();
+    let operation = db.access(|conn| ledger::sync::next(conn)).unwrap().unwrap();
+    assert_eq!(operation["revertOperationIds"].as_array().unwrap().len(), 1);
+    assert!(db.access(ledger::ai_undo::preview).unwrap().is_none());
+}
+
+#[test]
+#[ignore = "set SMW_TEST_URL and SMW_TEST_UNDO_TOKEN for a separate empty PostgreSQL test ledger"]
+fn published_ai_create_and_confirmation_undo_converge_across_two_live_replicas() {
+    tauri::async_runtime::block_on(async {
+        let base = env::var("SMW_TEST_URL").expect("set SMW_TEST_URL");
+        let url = base.trim_end_matches('/');
+        let token = env::var("SMW_TEST_UNDO_TOKEN").expect("set SMW_TEST_UNDO_TOKEN");
+        let files = tempfile::tempdir().unwrap();
+        let desktop = database(files.path().join("desktop"));
+        let phone = database(files.path().join("phone"));
+        let desktop_client = SyncClient::default();
+        let phone_client = SyncClient::default();
+        let ledger_id = bind_device(&desktop_client, &desktop, url, &token, true).await;
+        sync_without_conflicts(&desktop_client, &desktop).await;
+        bind_device(&phone_client, &phone, url, &token, false).await;
+        let platform = snapshot(&desktop)["platforms"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let created = "合成 AI 单笔";
+        let input = serde_json::from_value(json!({
+            "title":created,"platformId":platform,"kind":"single","month":"2026-12",
+            "amountCents":4200,"installmentCount":1
+        }))
+        .unwrap();
+        desktop
+            .access_checked(Some(&reviewed_revision(&desktop)), |write| {
+                ledger::add_bill(write, input)
+            })
+            .unwrap();
+        sync_without_conflicts(&desktop_client, &desktop).await;
+        sync_without_conflicts(&phone_client, &phone).await;
+        let created_id = unique_entry(&phone, created)["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let estimate = "合成手记尾款";
+        create_bill(&phone, &platform, "estimate", 1, estimate);
+        let original = unique_entry(&phone, estimate);
+        sync_without_conflicts(&phone_client, &phone).await;
+        // The peer has uploaded a separate bill while the AI device was offline.
+        undo_published_action(&desktop, "create_bill");
+        sync_without_conflicts(&desktop_client, &desktop).await;
+        sync_without_conflicts(&phone_client, &phone).await;
+        for db in [&desktop, &phone] {
+            assert_eq!(snapshot(db)["entries"], json!([original]));
+        }
+
+        let confirmed = serde_json::from_value(json!({
+            "id":original["id"],"title":estimate,"month":"2027-01","amountCents":15000
+        }))
+        .unwrap();
+        desktop
+            .access_checked(Some(&reviewed_revision(&desktop)), |write| {
+                ledger::confirm(write, confirmed)
+            })
+            .unwrap();
+        sync_without_conflicts(&desktop_client, &desktop).await;
+        sync_without_conflicts(&phone_client, &phone).await;
+        let changed = unique_entry(&phone, estimate);
+        assert_eq!(changed["status"], "due");
+        assert_eq!(changed["amountCents"], 15000);
+        assert_eq!(changed["month"], "2027-01");
+
+        let manual = "合成午餐手记";
+        create_bill(&phone, &platform, "single", 1, manual);
+        let lunch = unique_entry(&phone, manual);
+        sync_without_conflicts(&phone_client, &phone).await;
+        undo_published_action(&desktop, "confirm_estimate");
+        sync_without_conflicts(&desktop_client, &desktop).await;
+        sync_without_conflicts(&phone_client, &phone).await;
+        assert_eq!(snapshot(&desktop), snapshot(&phone));
+        assert_eq!(snapshot(&phone)["entries"].as_array().unwrap().len(), 2);
+        assert_eq!(unique_entry(&phone, estimate), original);
+        assert_eq!(unique_entry(&phone, manual), lunch);
+        let canonical = bootstrap(&transport().unwrap(), url, &token, Some(&ledger_id))
+            .await
+            .unwrap();
+        let records = canonical["records"].as_array().unwrap();
+        assert!(!records.iter().any(|record| record["kind"] == "entry"
+            && record["id"] == created_id
+            && !record["value"].is_null()));
+        for expected in [original, lunch] {
+            let server = records
+                .iter()
+                .find(|r| r["kind"] == "entry" && r["id"] == expected["id"])
+                .unwrap();
+            assert_eq!(server["value"], expected);
+        }
+    });
+}
+
 // Requires an isolated live API and an unused test ledger. Creates only synthetic data.
 #[test]
 #[ignore = "set SMW_TEST_URL and SMW_TEST_TOKEN for a disposable PostgreSQL-backed API"]

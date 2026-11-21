@@ -2,6 +2,7 @@
 import { onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { Database, WalletCards } from 'lucide-vue-next'
+import { invoke } from '@tauri-apps/api/core'
 import MenuNav from './MenuNav.vue'
 import { useLedgerSession } from '../ledgerSession'
 import { useSyncSession } from '../syncSession'
@@ -12,9 +13,18 @@ const route = useRoute()
 const { status: syncStatus } = useSyncSession()
 const { data, busy, error, notice, needsReload, retryRead, updateCalendarMonth } = useLedgerSession()
 let dayTimer: number
+// The first ledger read maintains history on launch. The same timer covers an idle window.
+let maintainedDay = new Date().toDateString()
 
 function refreshCalendar() {
   const now = new Date()
+  const day = now.toDateString()
+  if (maintainedDay !== day && '__TAURI_INTERNALS__' in window) {
+    maintainedDay = day
+    void invoke('maintain_ledger_history').catch(() => {
+      if (maintainedDay === day) maintainedDay = ''
+    })
+  }
   updateCalendarMonth(currentMonth(now), route.name === 'ledger' && !route.query.entry)
   const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
   window.clearTimeout(dayTimer)

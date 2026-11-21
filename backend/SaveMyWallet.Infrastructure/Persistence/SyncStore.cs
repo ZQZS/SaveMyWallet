@@ -51,6 +51,13 @@ internal sealed class SyncStore(LedgerDb db) : ISyncStore
                 current.Select(SyncRecordResults.FromEntity).ToArray(), changed.Select(r => r.Id).ToArray()), ct);
     }
 
+    public Task<PushQueryResultDto> RevertAsync(string ledgerId, RevertOperationQueryDto operation, CancellationToken ct) =>
+        Write(ledgerId, operation.OperationId, JsonSerializer.SerializeToElement(operation, LedgerJson.Options), false,
+            operation.Changes, _ => new RestMutationEntityDto(operation.Changes),
+            (_, cursor, current, changed) => new PushQueryResultDto(operation.OperationId, cursor,
+                current.Select(SyncRecordResults.FromEntity).ToArray(), changed.Select(r => r.Id).ToArray()),
+            ct, operation.RevertOperationIds);
+
     public Task ExecuteRestAsync(string ledgerId, string operationId, string fingerprint,
         Func<IReadOnlyList<SyncRecordEntityDto>, RestMutationEntityDto> build, CancellationToken ct) =>
         Write<RestMutationEntityDto, QueryResultBase?>(ledgerId, operationId, JsonSerializer.SerializeToElement(fingerprint, LedgerJson.Options), false,
@@ -65,7 +72,7 @@ internal sealed class SyncStore(LedgerDb db) : ISyncStore
     private async Task<TResult> Write<TMutation, TResult>(string ledgerId, string operationId, JsonElement request,
         bool seed, IReadOnlyList<SyncChangeQueryDto>? syncChanges, Func<IReadOnlyList<SyncRecordEntityDto>, TMutation> build,
         Func<TMutation, long, IReadOnlyList<SyncRecordEntityDto>, IReadOnlyList<SyncRecordEntityDto>, TResult> buildResponse,
-        CancellationToken ct)
+        CancellationToken ct, IReadOnlyList<string>? revertIds = null)
         where TMutation : RestMutationEntityDto
         where TResult : QueryResultBase?
     {
@@ -103,6 +110,8 @@ internal sealed class SyncStore(LedgerDb db) : ISyncStore
 
         var current = mutation.Changes.Select(c => byKey.TryGetValue((c.Kind, c.Id), out var row)
             ? StoredRecords.ToRecord(row) : new SyncRecordEntityDto(c.Kind, c.Id, null, null)).ToArray();
+        if (revertIds is not null)
+            await ReceiptRevert.VerifyAsync(db, ledgerId, revertIds, mutation.Changes, current, head.Cursor, ct);
         for (int i = 0; i < current.Length; i++)
         {
             var change = mutation.Changes[i];
@@ -111,7 +120,30 @@ internal sealed class SyncStore(LedgerDb db) : ISyncStore
             if (existing.Version != change.BaseVersion || !LedgerValueQueryResultDto.SameValue(change.Before, existing.Value))
                 throw new SyncConflict("conflict", head.Cursor, current);
         }
-        LedgerRules.Validate(known, mutation.Changes);
+        if (revertIds is not null)
+        {
+            try { LedgerRules.ValidateReceiptRevert(known, mutation.Changes); }
+            catch (LedgerException) { throw new SyncConflict("conflict", head.Cursor, current); }
+        }
+        else
+        {
+            try { LedgerRules.Validate(known, mutation.Changes); }
+            catch (LedgerException ex) when (syncChanges is not null && ex.Code == "unknown_platform")
+            {
+                // Another device can still have a queued bill for a platform whose creation was undone.
+                var platforms = known.Where(r => r.Kind == SyncRecordKind.Platform).Select(r => r.Id)
+                    .Concat(mutation.Changes.Where(c => c.Kind == SyncRecordKind.Platform).Select(c => c.Id));
+                var missing = mutation.Changes.Select(c => c.After).OfType<BillEntryQueryResultDto>()
+                    .Select(b => b.PlatformId).Except(platforms).ToArray();
+                var removed = await db.Database.SqlQuery<bool>($"""
+                    SELECT EXISTS (SELECT 1 FROM smw_changes, jsonb_array_elements("Records") e
+                        WHERE "LedgerId"={ledgerId} AND e->>'kind'='platform' AND e->>'id'=ANY({missing})
+                        AND e->'value'='null'::jsonb) AS "Value"
+                    """).SingleAsync(ct);
+                if (removed) throw new SyncConflict("conflict", head.Cursor, current);
+                throw;
+            }
+        }
 
         var changed = new List<SyncRecordEntityDto>();
         for (int i = 0; i < current.Length; i++)
@@ -123,9 +155,17 @@ internal sealed class SyncStore(LedgerDb db) : ISyncStore
                 row = new StoredRecordEntityDto { LedgerId = ledgerId, Kind = change.Kind, Id = change.Id, Version = operationId };
                 db.Records.Add(row);
             }
-            StoredRecords.Apply(row, change.After);
-            row.Version = operationId;
-            current[i] = new SyncRecordEntityDto(row.Kind, row.Id, change.After, operationId);
+            if (revertIds is not null && change.After is null && change.Kind is SyncRecordKind.Entry or SyncRecordKind.Platform)
+            {
+                db.Records.Remove(row);
+                current[i] = new SyncRecordEntityDto(row.Kind, row.Id, null, null);
+            }
+            else
+            {
+                StoredRecords.Apply(row, change.After);
+                row.Version = operationId;
+                current[i] = new SyncRecordEntityDto(row.Kind, row.Id, change.After, operationId);
+            }
             changed.Add(current[i]);
         }
         if (changed.Count > 0)

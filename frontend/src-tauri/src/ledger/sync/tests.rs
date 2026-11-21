@@ -4,6 +4,8 @@ use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::collections::HashSet;
 
+mod publish_undo;
+
 const URL: &str = "https://sync.example.invalid";
 const LEDGER: &str = "test-ledger";
 
@@ -89,6 +91,107 @@ fn page(cursor: i64, records: &Value) -> Value {
     json!({"ledgerId": LEDGER, "cursor": cursor, "records": records, "hasMore": false})
 }
 
+#[test]
+fn a_daily_restore_keeps_the_pre_bind_ledger_and_invalidates_old_writers() {
+    use crate::ledger::{history, review};
+    use chrono::Local;
+
+    let mut local = database();
+    let yesterday = Local::now().date_naive().pred_opt().unwrap();
+    let tx = local.transaction().unwrap();
+    history::checkpoint_on(&tx, yesterday).unwrap();
+    tx.commit().unwrap();
+    let original = backup::export(&mut local).unwrap();
+
+    let mut other = database();
+    ledger::add_platform(&other, "远端专属平台").unwrap();
+    let remote_page = publish(&mut other);
+    bind(&mut local, URL, &remote_page, "replace").unwrap();
+    ledger::add_platform(&local, "尚未上传").unwrap();
+    let queued = next(&local).unwrap().unwrap();
+    let bound_state = status(&local).unwrap();
+    assert_eq!(bound_state["pending"], 1);
+    let preview = |db: &mut Connection| {
+        history::list(db)
+            .unwrap()
+            .into_iter()
+            .find(|point| point.days_ago == 1)
+            .unwrap()
+    };
+    let point = preview(&mut local);
+    let restore = |db: &mut Connection, point: &history::RestorePoint| {
+        history::restore(db, point.days_ago, &point.date, &point.revision)
+    };
+    assert_eq!(
+        restore(&mut local, &point).unwrap_err().to_string(),
+        "SYNC_BOUND"
+    );
+    assert_eq!(status(&local).unwrap(), bound_state);
+    assert_eq!(next(&local).unwrap(), Some(queued.clone()));
+
+    unbind(&mut local).unwrap();
+    let point = preview(&mut local);
+    let before_restore = super::data_stamp(&local).unwrap();
+    let reviewed = serde_json::to_value(review::snapshot(&mut local).unwrap()).unwrap();
+    restore(&mut local, &point).unwrap();
+    let revision = reviewed["revision"].as_str().unwrap();
+    assert_eq!(
+        ledger::add_platform(review::LedgerWrite::new(&local, Some(revision)), "过期请求")
+            .unwrap_err()
+            .to_string(),
+        "AI_ACTION_STALE"
+    );
+    assert_eq!(
+        super::bind_checked(&mut local, URL, &remote_page, "replace", before_restore)
+            .unwrap_err()
+            .to_string(),
+        "SYNC_PREVIEW_STALE"
+    );
+    assert_eq!(
+        super::pull_for(&mut local, URL, LEDGER, &remote_page)
+            .unwrap_err()
+            .to_string(),
+        "SYNC_NOT_BOUND"
+    );
+    assert!(ack(&mut local, &accepted(&queued, 2)).is_err());
+
+    let unbound_state = status(&local).unwrap();
+    assert_eq!(unbound_state["bound"], false);
+    assert_eq!(unbound_state["pending"], 0);
+    assert_eq!(backup::export(&mut local).unwrap(), original);
+    assert_eq!(next(&other).unwrap(), None);
+    assert!(ledger::snapshot(&mut other)
+        .unwrap()
+        .platforms
+        .iter()
+        .any(|p| p.name == "远端专属平台"));
+}
+
+#[test]
+fn first_remote_pull_of_the_day_preserves_the_previous_local_state() {
+    use crate::ledger::history;
+    use chrono::Local;
+
+    let mut local = database();
+    bind(&mut local, URL, &page(0, &json!([])), "publish").unwrap();
+    let tx = local.transaction().unwrap();
+    history::checkpoint_on(&tx, Local::now().date_naive().pred_opt().unwrap()).unwrap();
+    tx.commit().unwrap();
+    let before = backup::export(&mut local).unwrap();
+    let incoming = json!([{"kind":"platform","id":"after-midnight","version":"v2",
+        "value":{"id":"after-midnight","name":"今天从远端拉取"}}]);
+    pull(&mut local, &page(2, &incoming)).unwrap();
+    assert_ne!(backup::export(&mut local).unwrap(), before);
+    unbind(&mut local).unwrap();
+    let point = history::list(&mut local)
+        .unwrap()
+        .into_iter()
+        .find(|p| p.days_ago == 1)
+        .unwrap();
+    history::restore(&mut local, 1, &point.date, &point.revision).unwrap();
+    assert_eq!(backup::export(&mut local).unwrap(), before);
+}
+
 // Turn a successfully applied operation into the wire receipt a server returns.
 fn accepted(operation: &Value, cursor: i64) -> Value {
     let changes = operation["changes"].as_array().unwrap();
@@ -129,6 +232,222 @@ fn bill(platform_id: &str, kind: &str, count: u32) -> BillInput {
         installment_count: count,
         installment_index: None,
     }
+}
+
+fn ai_preview(db: &mut Connection) -> Value {
+    serde_json::to_value(ledger::ai_undo::preview(db).unwrap()).unwrap()
+}
+
+#[test]
+fn queued_ai_writes_can_be_withdrawn_without_touching_manual_work_or_a_frozen_request() {
+    let mut db = database();
+    publish(&mut db); // A legacy server can still withdraw a request it has never seen.
+    let revision = ledger::review::revision(&db).unwrap();
+    let id = ledger::add_platform(
+        ledger::review::LedgerWrite::new(&db, Some(&revision)),
+        "AI 平台",
+    )
+    .unwrap();
+    let token = ai_preview(&mut db)["token"].as_str().unwrap().to_owned();
+    let hand = ledger::add_platform(&db, "手动平台").unwrap();
+    ledger::ai_undo::apply(&mut db, &token).unwrap();
+    let manual = next(&db).unwrap().unwrap();
+    assert_eq!(manual["changes"][0]["id"], hand);
+    let ids = ledger::snapshot(&mut db)
+        .unwrap()
+        .platforms
+        .into_iter()
+        .map(|p| p.id)
+        .collect::<Vec<_>>();
+    assert!(ids.contains(&hand) && !ids.contains(&id));
+    ack(&mut db, &accepted(&manual, 2)).unwrap();
+    let revision = ledger::review::revision(&db).unwrap();
+    ledger::add_platform(
+        ledger::review::LedgerWrite::new(&db, Some(&revision)),
+        "等回执",
+    )
+    .unwrap();
+    let frozen = next(&db).unwrap().unwrap();
+    assert_eq!(ai_preview(&mut db)["blockedReason"], "AI_UNDO_SYNC_PENDING");
+    assert_eq!(next(&db).unwrap().unwrap(), frozen);
+    ack(&mut db, &accepted(&frozen, 3)).unwrap();
+    assert_eq!(ai_preview(&mut db)["blockedReason"], "AI_UNDO_SYNC_UPGRADE");
+    let mut upgraded = page(3, &json!([]));
+    upgraded["supportsAiRevert"] = json!(true);
+    pull(&mut db, &upgraded).unwrap();
+    let ticket = ai_preview(&mut db);
+    assert_eq!(ticket["blocked"], false);
+    ledger::ai_undo::apply(&mut db, ticket["token"].as_str().unwrap()).unwrap();
+    let revert = next(&db).unwrap().unwrap();
+    assert_eq!(revert["revertOperationIds"], json!([frozen["operationId"]]));
+    assert_eq!(revert["changes"][0]["baseVersion"], frozen["operationId"]);
+    assert_eq!(revert["changes"][0]["after"], Value::Null);
+}
+
+#[test]
+fn a_mixed_published_and_unsent_batch_reverses_only_the_receipted_keys_and_preserves_manual_entries(
+) {
+    let mut db = database();
+    let mut remote = database();
+    let mut seed = publish(&mut db);
+    seed["supportsAiRevert"] = json!(true);
+    pull(&mut db, &seed).unwrap();
+    bind(&mut remote, URL, &seed, "replace").unwrap();
+    let platform = ledger::snapshot(&mut db).unwrap().platforms.remove(0).id;
+    let revision = ledger::review::revision(&db).unwrap();
+    let write = ledger::review::LedgerWrite::new(&db, Some(&revision));
+    ledger::add_bills(
+        write,
+        &[
+            bill(&platform, "single", 1),
+            bill(&platform, "single", 1),
+            bill(&platform, "single", 1),
+        ],
+    )
+    .unwrap();
+    ledger::add_bill(&db, bill(&platform, "single", 1)).unwrap();
+    let token = ai_preview(&mut db)["token"].as_str().unwrap().to_owned();
+    let prefix = format!("ai.{token}.");
+    let mut published = Vec::new();
+    for cursor in 2..4 {
+        let op = next(&db).unwrap().unwrap();
+        assert!(op["operationId"].as_str().unwrap().starts_with(&prefix));
+        let receipt = accepted(&op, cursor);
+        ack(&mut db, &receipt).unwrap();
+        pull(&mut remote, &page(cursor, &receipt["records"])).unwrap();
+        published.push(op["operationId"].as_str().unwrap().to_string());
+    }
+    ledger::ai_undo::apply(&mut db, &token).unwrap();
+    assert_eq!(entries(&mut db).len(), 1);
+    let manual = next(&db).unwrap().unwrap();
+    assert!(manual["revertOperationIds"].is_null());
+    let receipt = accepted(&manual, 4);
+    ack(&mut db, &receipt).unwrap();
+    pull(&mut remote, &page(4, &receipt["records"])).unwrap();
+    let inverse = next(&db).unwrap().unwrap();
+    published.sort();
+    assert_eq!(inverse["revertOperationIds"], json!(published));
+    assert_eq!(inverse["changes"].as_array().unwrap().len(), 2);
+    let mut receipt = accepted(&inverse, 5);
+    for row in receipt["records"].as_array_mut().unwrap() {
+        assert_eq!(row["value"], Value::Null);
+        row["version"] = Value::Null;
+    }
+    ack(&mut db, &receipt).unwrap();
+    pull(&mut remote, &page(5, &receipt["records"])).unwrap();
+    assert_eq!(entries(&mut remote), entries(&mut db));
+}
+
+#[test]
+fn an_identical_remote_write_is_never_owned_by_the_ai_on_this_device() {
+    let mut db = database();
+    publish(&mut db);
+    let revision = ledger::review::revision(&db).unwrap();
+    ledger::add_platform(
+        ledger::review::LedgerWrite::new(&db, Some(&revision)),
+        "两台设备同名",
+    )
+    .unwrap();
+    let op = next(&db).unwrap().unwrap();
+    let mut receipt = accepted(&op, 2);
+    receipt["changedIds"] = json!([]);
+    receipt["records"][0]["version"] = json!("remote-writer");
+    ack(&mut db, &receipt).unwrap();
+    assert_eq!(ai_preview(&mut db)["blockedReason"], "AI_UNDO_CONFLICT");
+}
+
+#[test]
+fn remote_platform_revert_keeps_offline_bills_until_the_device_resolves_them() {
+    for choice in ["local", "remote"] {
+        let mut db = database();
+        publish(&mut db);
+        let id = ledger::snapshot(&mut db).unwrap().platforms.remove(0).id;
+        ledger::add_bill(&db, bill(&id, "single", 1)).unwrap();
+        let child = next(&db).unwrap().unwrap();
+        let bill_id = &child["changes"][0]["id"];
+        let reply = json!({"cursor":2,"code":"conflict","records":[
+            {"kind":"entry","id":bill_id,"value":null,"version":null}]});
+        let op_id = child["operationId"].as_str().unwrap();
+        conflict(&mut db, op_id, &reply).unwrap();
+        let deleted = page(
+            2,
+            &json!([{"kind":"platform","id":id,"value":null,"version":null}]),
+        );
+        pull(&mut db, &deleted).unwrap();
+        let name: String = db
+            .query_row("SELECT name FROM platforms WHERE id=?", [&id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            status(&db).unwrap()["conflicts"][0]["restoresPlatforms"],
+            json!([name])
+        );
+        assert_eq!(entries(&mut db).len(), 1);
+        resolve(&mut db, op_id, choice).unwrap();
+        let exists: bool = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM platforms WHERE id=?)",
+                [&id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        if choice == "local" {
+            assert!(exists);
+            let kept = next(&db).unwrap().unwrap();
+            assert_eq!(kept["changes"].as_array().unwrap().len(), 2);
+            assert_eq!(kept["changes"][0]["kind"], "platform");
+            assert_eq!(kept["changes"][0]["after"]["name"], name);
+            assert_eq!(kept["changes"][1]["id"], *bill_id);
+            ack(&mut db, &accepted(&kept, 3)).unwrap();
+            assert_eq!(entries(&mut db).len(), 1);
+        } else {
+            assert!(!exists);
+            assert!(entries(&mut db).is_empty());
+            assert!(next(&db).unwrap().is_none());
+        }
+    }
+}
+
+#[test]
+fn a_remote_manual_bill_arrives_while_a_platform_revert_is_disputed() {
+    let mut db = database();
+    let mut seed = publish(&mut db);
+    seed["supportsAiRevert"] = json!(true);
+    pull(&mut db, &seed).unwrap();
+    let revision = ledger::review::revision(&db).unwrap();
+    let id = ledger::add_platform(
+        ledger::review::LedgerWrite::new(&db, Some(&revision)),
+        "AI 账单平台",
+    )
+    .unwrap();
+    let original = next(&db).unwrap().unwrap();
+    let acceptance = accepted(&original, 2);
+    ack(&mut db, &acceptance).unwrap();
+    let ticket = ai_preview(&mut db);
+    ledger::ai_undo::apply(&mut db, ticket["token"].as_str().unwrap()).unwrap();
+    let revert = next(&db).unwrap().unwrap();
+    let revert_id = revert["operationId"].as_str().unwrap();
+    conflict(
+        &mut db,
+        revert_id,
+        &json!({"code":"conflict","cursor":3,"records":acceptance["records"]}),
+    )
+    .unwrap();
+    let child = json!({"kind":"entry","id":"manual","version":"remote","value":{
+        "kind":"single","id":"manual","platformId":id,"month":"2026-12","title":"手记",
+        "status":"due","amountCents":150,"installmentIndex":null,"installmentCount":null
+    }});
+    pull(&mut db, &page(3, &json!([child]))).unwrap();
+    assert_eq!(entries(&mut db)[0]["title"], "手记");
+    assert_eq!(status(&db).unwrap()["conflicts"][0]["aiRevert"], true);
+    assert_eq!(
+        resolve(&mut db, revert_id, "local")
+            .unwrap_err()
+            .to_string(),
+        "AI_UNDO_SYNC_CONFLICT"
+    );
+    resolve(&mut db, revert_id, "remote").unwrap();
+    assert_eq!(entries(&mut db)[0]["platformId"], id);
+    assert!(next(&db).unwrap().is_none());
 }
 
 fn entries(db: &mut Connection) -> Vec<Value> {
@@ -194,8 +513,11 @@ fn migrating_a_v2_queue_preserves_pending_period_ids_conflicts_and_cursor() {
         old_columns, 0,
         "this fixture exercises the original v2 table"
     );
-    db.execute("INSERT INTO sync_binding VALUES(1,?1,?2,7)", [URL, LEDGER])
-        .unwrap();
+    db.execute(
+        "INSERT INTO sync_binding(singleton,url,ledger_id,cursor) VALUES(1,?1,?2,7)",
+        [URL, LEDGER],
+    )
+    .unwrap();
     db.execute_batch("INSERT INTO platforms(id,name) VALUES('old-platform','已有平台');
         INSERT INTO entries(id,platform_id,title,month,amount_cents,status,kind,installment_index,installment_count)
         VALUES ('old-period-1','old-platform','跨年分期','2026-12',1500,'due','installment',1,2),
@@ -238,7 +560,7 @@ fn migrating_a_v2_queue_preserves_pending_period_ids_conflicts_and_cursor() {
     let version: u32 = db
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 6);
+    assert_eq!(version, 8);
     let saved = status(&db).unwrap();
     assert_eq!(saved["cursor"], 7);
     assert_eq!(saved["pending"], 2);
@@ -268,8 +590,11 @@ fn upgrading_an_extended_v2_database_keeps_its_exact_frozen_request_and_payment_
         .unwrap();
     db.pragma_update(None, "user_version", 2).unwrap();
     let id = "old-paid-bill".to_owned();
-    db.execute("INSERT INTO sync_binding VALUES(1,?1,?2,1)", [URL, LEDGER])
-        .unwrap();
+    db.execute(
+        "INSERT INTO sync_binding(singleton,url,ledger_id,cursor) VALUES(1,?1,?2,1)",
+        [URL, LEDGER],
+    )
+    .unwrap();
     db.execute_batch(
         "INSERT INTO entries(id,platform_id,title,month,amount_cents,status,kind)
         SELECT 'old-paid-bill',id,'旧账单','2026-12',100,'due','single' FROM platforms LIMIT 1;
@@ -283,7 +608,17 @@ fn upgrading_an_extended_v2_database_keeps_its_exact_frozen_request_and_payment_
         FROM sync_local l JOIN sync_shadow s USING(kind,id) WHERE l.kind='entry';",
     )
     .unwrap();
-    let request = next(&db).unwrap().unwrap();
+    // Freeze a v2-format wire image without running a current client on a v2 schema.
+    let change = db.query_row(
+        "SELECT kind,id,base_version,before_json,after_json FROM sync_changes WHERE operation_id='old-payment'",
+        [], super::read_change,
+    ).unwrap();
+    let request = json!({"operationId":"old-payment","seed":false,"changes":[change]});
+    db.execute(
+        "UPDATE sync_queue SET wire_json=? WHERE operation_id='old-payment'",
+        [request.to_string()],
+    )
+    .unwrap();
     let frozen_wire = |conn: &Connection| -> String {
         conn.query_row(
             "SELECT wire_json FROM sync_queue WHERE wire_json IS NOT NULL",
@@ -293,11 +628,11 @@ fn upgrading_an_extended_v2_database_keeps_its_exact_frozen_request_and_payment_
         .unwrap()
     };
     let original_wire = frozen_wire(&db);
-    let state = status(&db).unwrap();
-    assert_eq!(state["undoableIds"], json!([id]));
     // A development-era v2 file may already have both columns, their index,
     // and the payment ownership table. Full setup must remain idempotent.
     ledger::migrate(&mut db).unwrap();
+    let state = status(&db).unwrap();
+    assert_eq!(state["undoableIds"], json!([id]));
     ledger::migrate(&mut db).unwrap();
     assert_eq!(status(&db).unwrap(), state);
     assert_eq!(frozen_wire(&db), original_wire);
@@ -407,6 +742,32 @@ fn imported_billed_periods_sync_from_the_statement_month_through_the_last_instal
 
 fn confirmed_pair() -> (Connection, Connection, Value, String) {
     conflicting_terms([("2026-12", 32000, 1000), ("2027-01", 35000, 5500)])
+}
+
+#[test]
+fn a_pending_ai_payment_that_converges_during_conflict_resolution_has_no_undo_right() {
+    let (mut desktop, mut phone, _, id) = confirmed_pair();
+    let revision = ledger::review::revision(&phone).unwrap();
+    ledger::mark_payment(
+        ledger::review::LedgerWrite::new(&phone, Some(&revision)),
+        std::slice::from_ref(&id),
+        true,
+    )
+    .unwrap();
+    ledger::mark_payment(&mut desktop, std::slice::from_ref(&id), true).unwrap();
+    let paid = accepted(&next(&desktop).unwrap().unwrap(), 3);
+    let disputed = next(&phone).unwrap().unwrap();
+    let op_id = disputed["operationId"].as_str().unwrap();
+    conflict(
+        &mut phone,
+        op_id,
+        &json!({"code":"conflict","cursor":3,"records":paid["records"]}),
+    )
+    .unwrap();
+    resolve(&mut phone, op_id, "remote").unwrap();
+    assert!(next(&phone).unwrap().is_none());
+    assert_eq!(entries(&mut phone)[0]["status"], "paid");
+    assert_eq!(ai_preview(&mut phone)["blockedReason"], "AI_UNDO_CONFLICT");
 }
 
 fn conflicting_terms(terms: [(&str, i64, i64); 2]) -> (Connection, Connection, Value, String) {

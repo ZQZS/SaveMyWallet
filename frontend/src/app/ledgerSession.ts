@@ -122,8 +122,20 @@ export function createLedgerSession({ repository, calculateMonth }: LedgerServic
     if (ids.length !== payment.ids.length) lastPayment.value = ids.length ? { ...payment, ids } : null
   }
 
+  function reconcilePaymentUndo() {
+    const payment = lastPayment.value
+    if (!payment || !snapshot.value) return
+    const status = payment.paid ? 'paid' : 'due'
+    const unavailable = new Set(payment.ids)
+    for (const entry of snapshot.value.entries) {
+      if (!entry.voided && entry.amountCents > 0 && entry.status === status) unavailable.delete(entry.id)
+      if (!unavailable.size) break
+    }
+    if (unavailable.size) invalidatePaymentUndo([...unavailable])
+  }
+
   return { repository, calculateMonth, data, platformSummaries, calendarMonth, month, busy, needsReload, writeCount,
-    error, notice, lastPayment, selectMonth, updateCalendarMonth, retryRead, commit, markPayments, undoPayment, invalidatePaymentUndo }
+    error, notice, lastPayment, selectMonth, updateCalendarMonth, retryRead, commit, markPayments, undoPayment, invalidatePaymentUndo, reconcilePaymentUndo }
 }
 
 export type LedgerSession = ReturnType<typeof createLedgerSession>

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { effectScope } from 'vue'
-import { MAX_PET_MESSAGE_LENGTH, useGeneralChat, usePetChat } from '../src/features/pets/usePetChat.ts'
+import { forgetPetChats, MAX_PET_MESSAGE_LENGTH, useGeneralChat, usePetChat } from '../src/features/pets/usePetChat.ts'
 
 const month = '2026-11'
 const pet = { name: '测试狐', description: '好奇', greetings: ['一起查线索？'] }
@@ -17,6 +17,75 @@ function ask(chat, question, facts, details) {
   chat.draft.value = question
   return chat.send('zh-CN', facts, details)
 }
+
+test('重复新建只保留一个空白聊天，草稿和对话仍可从另一个窗口继续', async t => {
+  const character = { ...pet, id: 'reuse-empty' }
+  const request = async () => '收到。'
+  const first = openChat(t, character, request)
+  const second = openChat(t, character, request)
+  first.close()
+  const original = second.activeConversationId.value
+  for (let i = 0; i < 50; i++) second.newChat()
+  assert.equal(second.conversations.value.length, 1)
+  await ask(second, '保留的对话')
+  second.newChat()
+  second.draft.value = '保留的草稿'
+  const draftId = second.activeConversationId.value
+  second.newChat()
+  const emptyId = second.activeConversationId.value
+  for (let i = 0; i < 50; i++) {
+    second.selectChat(original)
+    second.newChat()
+    assert.equal(second.activeConversationId.value, emptyId)
+  }
+  assert.equal(second.conversations.value.length, 3)
+  second.close()
+  const reopened = openChat(t, character, request)
+  reopened.selectChat(original)
+  assert.equal(reopened.messages.value.length, 2)
+  reopened.selectChat(draftId)
+  assert.equal(reopened.draft.value, '保留的草稿')
+})
+
+test('移除角色释放所有月份聊天，其他角色和通用聊天的草稿仍保留', async t => {
+  const character = { ...pet, id: 'imported-forgotten' }
+  const request = async () => '收到。'
+  for (const selectedMonth of [month, '2028-01']) {
+    const pane = openChat(t, character, request, selectedMonth)
+    await ask(pane, '合成账单')
+    pane.close()
+  }
+  const other = openChat(t, { ...pet, id: 'other-preserved' }, request)
+  other.draft.value = '其他角色'
+  const scope = effectScope()
+  t.after(() => scope.stop())
+  const general = scope.run(() => useGeneralChat(month, request))
+  general.draft.value = '通用聊天草稿'
+  forgetPetChats(character.id)
+  for (const selectedMonth of [month, '2028-01']) {
+    assert.deepEqual(openChat(t, character, request, selectedMonth).messages.value, [])
+  }
+  assert.equal(openChat(t, { ...pet, id: 'other-preserved' }, request).draft.value, '其他角色')
+  assert.equal(scope.run(() => useGeneralChat(month, request)).draft.value, '通用聊天草稿')
+})
+
+test('待确认写入期间关闭空白窗口，重开后能收到同一笔写入的回执', async t => {
+  const character = { ...pet, id: 'pending-reopen-receipt' }
+  const saved = Promise.withResolvers()
+  const request = async (_input, signal, run) => {
+    await run('create_bill', {}, signal)
+    throw new Error('AI_CANCELLED')
+  }
+  const chat = openChat(t, character, request)
+  chat.draft.value = '合成账单'
+  const pending = chat.send('zh-CN', undefined, undefined, () => saved.promise)
+  chat.draft.value = ''
+  chat.close()
+  const reopened = openChat(t, character, request)
+  saved.resolve({ status: 'applied', message: '已保存' })
+  assert.equal(await pending, true)
+  assert.deepEqual(reopened.messages.value.map(item => item.content), ['合成账单', '已保存'])
+})
 
 test('a confirmed write that finishes after switching threads leaves the receipt in its original chat', async t => {
   const saved = Promise.withResolvers()

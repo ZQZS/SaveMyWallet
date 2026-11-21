@@ -5,6 +5,33 @@ import { summarize } from '../src/domain/ledger.ts'
 import { buildStatistics } from '../src/features/statistics/statistics.ts'
 import { formatMoney, t } from '../src/i18n/index.ts'
 
+test('撤销 AI 改账后仍能撤销独立的手动还款，刷新重试只更新仍可用的记录', async () => {
+  const month = '2026-11'
+  const ledger = { entries: ['manual', 'changed', 'removed', 'voided'].map(id => ({
+    id, month, title: id, kind: 'single', platformId: 'p', status: 'paid', amountCents: 100,
+  })), platforms: [], settings: { defaultSalaryCents: 0, warningFloorCents: 0 }, salaryOverrides: {} }
+  let failRead = false
+  const calls = []
+  const session = createLedgerSession({ calculateMonth: summarize, repository: {
+    async load() { if (failRead) throw Error('read failed'); return structuredClone(ledger) },
+    async undoPayment(ids, paid) { calls.push([ids, paid]); return ids },
+  } })
+  session.lastPayment.value = { month, ids: ledger.entries.map(entry => entry.id), paid: true }
+  await session.retryRead()
+  await session.commit(async () => {
+    ledger.entries.find(e => e.id === 'changed').status = 'due'
+    ledger.entries.find(e => e.id === 'voided').voided = true
+    ledger.entries = ledger.entries.filter(e => e.id !== 'removed')
+    failRead = true
+  }, session.reconcilePaymentUndo)
+  assert.equal(session.needsReload.value, true)
+  failRead = false
+  await session.retryRead()
+  assert.deepEqual(session.lastPayment.value, { month, ids: ['manual'], paid: true })
+  await session.undoPayment()
+  assert.deepEqual(calls, [[['manual'], false]])
+})
+
 test('自然月变化会更新账单和统计，浏览其他月份不会触发顺延', async () => {
   const original = { id: 'balance', platformId: 'store', title: '预订尾款', month: '2026-12',
     kind: 'estimate', status: 'estimated', amountCents: 8000, depositCents: 2000,

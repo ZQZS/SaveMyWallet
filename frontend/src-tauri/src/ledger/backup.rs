@@ -30,7 +30,7 @@ struct Envelope<'a> {
     ledger: &'a RawValue,
 }
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 pub struct BackupPreview {
     pub platforms: usize,
     pub entries: usize,
@@ -43,6 +43,13 @@ pub fn export(conn: &mut Connection) -> StorageResult<String> {
 }
 
 pub(super) fn encode(ledger: Ledger) -> StorageResult<String> {
+    let contents = encode_contents(ledger)?;
+    check_size(&contents)?;
+    Ok(contents)
+}
+
+// The file picker has a size limit. An existing local ledger can grow beyond it.
+pub(super) fn encode_contents(ledger: Ledger) -> StorageResult<String> {
     let backup = Backup {
         format: FORMAT,
         version: if ledger.entries.iter().any(|entry| entry.deposit_cents != 0) {
@@ -60,9 +67,7 @@ pub(super) fn encode(ledger: Ledger) -> StorageResult<String> {
         },
         ledger,
     };
-    let contents = serde_json::to_string(&backup).map_err(|_| "BACKUP_READ")?;
-    check_size(&contents)?;
-    Ok(contents)
+    Ok(serde_json::to_string(&backup).map_err(|_| "BACKUP_READ")?)
 }
 
 fn check_size(contents: &str) -> StorageResult<()> {
@@ -173,6 +178,10 @@ pub(super) fn validate(ledger: &Ledger) -> StorageResult<()> {
 
 fn decode(contents: &str) -> StorageResult<Ledger> {
     check_size(contents)?;
+    decode_contents(contents)
+}
+
+pub(super) fn decode_contents(contents: &str) -> StorageResult<Ledger> {
     let text = contents.strip_prefix('\u{feff}').unwrap_or(contents);
     let envelope: Envelope<'_> = serde_json::from_str(text).map_err(|_| "BACKUP_FORMAT")?;
     if envelope.format != FORMAT {
@@ -195,18 +204,22 @@ fn decode(contents: &str) -> StorageResult<Ledger> {
 
 pub fn preview(contents: &str) -> StorageResult<BackupPreview> {
     let ledger = decode(contents)?;
-    Ok(BackupPreview {
+    Ok(summarize(&ledger))
+}
+
+pub(super) fn summarize(ledger: &Ledger) -> BackupPreview {
+    BackupPreview {
         platforms: ledger.platforms.len(),
         entries: ledger.entries.len(),
         overrides: ledger.salary_overrides.len(),
-    })
+    }
 }
 
 fn clear_ledger(tx: &Transaction<'_>) -> rusqlite::Result<()> {
-    tx.execute_batch("DELETE FROM entries; DELETE FROM platforms; DELETE FROM salary_overrides; DELETE FROM settings;")
+    tx.execute_batch("DELETE FROM ai_undo_operation; DELETE FROM entries; DELETE FROM platforms; DELETE FROM salary_overrides; DELETE FROM settings;")
 }
 
-fn replace(tx: &Transaction<'_>, ledger: Ledger) -> rusqlite::Result<()> {
+pub(super) fn replace(tx: &Transaction<'_>, ledger: Ledger) -> rusqlite::Result<()> {
     clear_ledger(tx)?;
     {
         let mut insert = tx.prepare("INSERT INTO platforms (id, name) VALUES (?1, ?2)")?;
@@ -260,6 +273,7 @@ pub fn restore(conn: &mut Connection, contents: &str) -> StorageResult<()> {
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|_| "BACKUP_WRITE")?;
     super::sync::require_unbound(&tx)?;
+    super::history::checkpoint(&tx)?;
     replace(&tx, ledger).map_err(|_| "BACKUP_WRITE")?;
     Ok(tx.commit().map_err(|_| "BACKUP_WRITE")?)
 }
@@ -272,6 +286,7 @@ pub fn reset(conn: &mut Connection, confirmation: &str) -> StorageResult<()> {
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|_| "BACKUP_WRITE")?;
     super::sync::require_unbound(&tx)?;
+    super::history::reset_tracking(&tx)?;
     clear_ledger(&tx).map_err(|_| "BACKUP_WRITE")?;
     tx.execute("DELETE FROM sync_recovery", [])
         .map_err(|_| "BACKUP_WRITE")?;

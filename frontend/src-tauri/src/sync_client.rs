@@ -298,8 +298,13 @@ impl SyncClient {
                 break;
             };
             let op_id = op["operationId"].as_str().ok_or("SYNC_PROTOCOL")?;
+            let endpoint = if op["revertOperationIds"].is_array() {
+                "revert"
+            } else {
+                "push"
+            };
             let (status, result) = exchange(
-                client.post(format!("{url}/sync/push")).json(&op),
+                client.post(format!("{url}/sync/{endpoint}")).json(&op),
                 token,
                 Some(ledger),
             )

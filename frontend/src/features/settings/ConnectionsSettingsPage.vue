@@ -82,7 +82,10 @@ function resolve(operationId: string, choice: ConflictChoice) {
 function exportPrevious() {
   return interact(async () => {
     const contents = await invoke<string | null>('sync_previous_backup')
-    if (!contents) message.value = 'sync.noPrevious'
+    if (!contents) {
+      await sync.load()
+      message.value = 'sync.noPrevious'
+    }
     else if (await saveBackupFile(contents)) message.value = 'settings.backup.saved'
   })
 }
@@ -158,6 +161,7 @@ function exportPrevious() {
         :disabled="blocked || !status.authenticated" @resolve="resolve(conflict.operationId, $event)" />
     </template>
     <section v-if="status?.bound || status?.hasPreviousBackup" class="settings-sheet">
+      <p v-if="status.previousBackupUndated" class="settings-muted">{{ t('sync.previousUndated') }}</p>
       <div class="settings-actions">
         <button v-if="status.hasPreviousBackup" type="button" class="settings-button" :disabled="blocked" @click="exportPrevious">{{ t('sync.previous') }}</button>
         <button v-if="status.bound && !askingDisconnect" type="button" class="settings-button danger" :disabled="blocked" @click="askingDisconnect = true">{{ t('sync.disconnect') }}</button>

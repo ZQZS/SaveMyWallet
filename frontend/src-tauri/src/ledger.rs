@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, error::Error, time::Duration};
 
@@ -6,10 +6,14 @@ pub type StorageResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 pub(crate) const MAX_CENTS: i64 = 99_999_999_900;
 const LAST_MONTH: u32 = 2099 * 12 + 11;
 
+pub(crate) mod ai_undo;
+pub(crate) mod ai_undo_capture;
 pub mod backup;
+pub(crate) mod history;
 mod installments;
 pub(crate) mod review;
 pub mod sync;
+use ai_undo_capture::LedgerTransaction;
 pub use installments::set_installment_voided;
 use review::LedgerWrite;
 
@@ -141,12 +145,13 @@ pub fn migrate(conn: &mut Connection) -> StorageResult<()> {
             tx.execute_batch(include_str!("schema_v1.sql"))?;
             tx.execute_batch(include_str!("initial_data.sql"))?;
         }
-        1..=6 => (),
+        1..=8 => (),
         _ => return Err("账本版本较新，请升级应用后重试。".into()),
     }
     if version < 2 {
         tx.execute_batch(include_str!("schema_v2.sql"))?;
     }
+    let mut freeze_legacy_queue = false;
     if version < 3 {
         // Development builds shared user_version 2 while these two columns were introduced.
         let has_column = |name: &str| -> rusqlite::Result<bool> {
@@ -164,11 +169,7 @@ pub fn migrate(conn: &mut Connection) -> StorageResult<()> {
             tx.execute("ALTER TABLE sync_queue ADD COLUMN wire_json TEXT", [])?;
         }
         tx.execute_batch(include_str!("schema_v3.sql"))?;
-        if legacy_queue {
-            // It may already have been committed remotely with its response lost.
-            // Keep its request exactly as queued before accepting any further local edits.
-            sync::freeze_next(&tx)?;
-        }
+        freeze_legacy_queue = legacy_queue;
     }
     if version < 4 {
         tx.execute_batch(include_str!("schema_v4.sql"))?;
@@ -178,6 +179,17 @@ pub fn migrate(conn: &mut Connection) -> StorageResult<()> {
     }
     if version < 6 {
         tx.execute_batch(include_str!("schema_v6.sql"))?;
+    }
+    if version < 7 {
+        tx.execute_batch(include_str!("schema_v7.sql"))?;
+    }
+    if version < 8 {
+        tx.execute_batch(include_str!("schema_v8.sql"))?;
+    }
+    if freeze_legacy_queue {
+        // A legacy request may already be committed remotely. Freeze it using the
+        // fully migrated schema before accepting local edits.
+        sync::freeze_next(&tx)?;
     }
     tx.commit()?;
     Ok(())
@@ -320,7 +332,7 @@ pub(crate) fn platform_name(name: &str) -> StorageResult<&str> {
 
 pub fn add_platform<'a>(write: impl Into<LedgerWrite<'a>>, name: &str) -> StorageResult<String> {
     let name = platform_name(name)?;
-    let tx = write.into().begin(TransactionBehavior::Deferred)?;
+    let mut tx = write.into().begin("create_platform")?;
     let id: String = tx
         .query_row(
             "INSERT INTO platforms (id,name) VALUES(
@@ -332,6 +344,7 @@ pub fn add_platform<'a>(write: impl Into<LedgerWrite<'a>>, name: &str) -> Storag
         )
         .optional()?
         .ok_or("同名平台已存在，可直接选择。")?;
+    tx.inserted("platform", [id.as_str()]);
     sync::capture(&tx, [("platform", id.as_str())])?;
     tx.commit()?;
     Ok(id)
@@ -345,15 +358,15 @@ pub fn add_bills<'a>(write: impl Into<LedgerWrite<'a>>, inputs: &[BillInput]) ->
     if inputs.is_empty() {
         return Err("BILL_BATCH_EMPTY".into());
     }
-    let tx = write.into().begin(TransactionBehavior::Immediate)?;
+    let mut tx = write.into().begin("create_bill")?;
     for input in inputs {
-        insert_bill(&tx, input)?;
+        insert_bill(&mut tx, input)?;
     }
     tx.commit()?;
     Ok(())
 }
 
-fn insert_bill(tx: &Transaction<'_>, input: &BillInput) -> StorageResult<()> {
+fn insert_bill(tx: &mut LedgerTransaction<'_>, input: &BillInput) -> StorageResult<()> {
     let title = bill_title(&input.title)?;
     let billed_month = month_index(&input.month)?;
     let deposit = input.deposit_cents.unwrap_or(0);
@@ -422,6 +435,7 @@ fn insert_bill(tx: &Transaction<'_>, input: &BillInput) -> StorageResult<()> {
             )?);
         }
     }
+    tx.inserted("entry", ids.iter().map(String::as_str));
     sync::capture(tx, ids.iter().map(|id| ("entry", id.as_str())))?;
     Ok(())
 }
@@ -429,13 +443,14 @@ fn insert_bill(tx: &Transaction<'_>, input: &BillInput) -> StorageResult<()> {
 pub fn confirm<'a>(write: impl Into<LedgerWrite<'a>>, input: ConfirmInput) -> StorageResult<()> {
     let title = bill_title(&input.title)?;
     month_index(&input.month)?;
-    let tx = write.into().begin(TransactionBehavior::Immediate)?;
+    let mut tx = write.into().begin("confirm_estimate")?;
     let saved_deposit: i64 = tx.query_row(
         "SELECT deposit_cents FROM entries WHERE id = ? AND status = 'estimated' AND voided = 0",
         [&input.id], |row| row.get(0),
     ).optional()?.ok_or("STALE_ESTIMATE")?;
     let deposit = input.deposit_cents.unwrap_or(saved_deposit);
     check_bill_amount("estimate", input.amount_cents, deposit, input.total_cents)?;
+    tx.remember("entry", [input.id.as_str()])?;
     let status = if input.amount_cents == 0 {
         "paid"
     } else {
@@ -451,7 +466,12 @@ pub fn confirm<'a>(write: impl Into<LedgerWrite<'a>>, input: ConfirmInput) -> St
     Ok(())
 }
 
-fn change_voided(tx: &Transaction<'_>, ids: &[String], voided: bool) -> StorageResult<Vec<String>> {
+fn change_voided(
+    tx: &mut LedgerTransaction<'_>,
+    ids: &[String],
+    voided: bool,
+) -> StorageResult<Vec<String>> {
+    tx.remember("entry", ids.iter().map(String::as_str))?;
     let mut changed = Vec::new();
     let mut update = tx.prepare("UPDATE entries SET voided = ?1 WHERE id = ?2 AND voided <> ?1")?;
     let mut exists = tx.prepare("SELECT EXISTS(SELECT 1 FROM entries WHERE id = ?)")?;
@@ -483,8 +503,10 @@ pub fn set_entries_voided<'a>(
     ids: &[String],
     voided: bool,
 ) -> StorageResult<Vec<String>> {
-    let tx = write.into().begin(TransactionBehavior::Immediate)?;
-    let changed = change_voided(&tx, ids, voided)?;
+    let mut tx = write
+        .into()
+        .begin(if voided { "void_bills" } else { "restore_bill" })?;
+    let changed = change_voided(&mut tx, ids, voided)?;
     tx.commit()?;
     Ok(changed)
 }
@@ -516,7 +538,15 @@ fn change_payment(
     } else {
         ("paid", "due")
     };
-    let tx = write.begin(TransactionBehavior::Immediate)?;
+    let action = if undo {
+        "undo_last_payment"
+    } else if paid {
+        "mark_bills_paid"
+    } else {
+        "mark_bills_unpaid"
+    };
+    let mut tx = write.begin(action)?;
+    tx.remember("entry", ids.iter().map(String::as_str))?;
     let guarded = undo && sync::bound(&tx)?;
     let mut changed = Vec::new();
     {
@@ -559,7 +589,9 @@ pub fn budget<'a>(write: impl Into<LedgerWrite<'a>>, input: BudgetInput) -> Stor
     if let Some(amount) = input.override_salary_cents {
         check_amount(amount, 0)?;
     }
-    let tx = write.into().begin(TransactionBehavior::Deferred)?;
+    let mut tx = write.into().begin("update_budget")?;
+    tx.remember("setting", ["defaultSalaryCents", "warningFloorCents"])?;
+    tx.remember("override", [input.month.as_str()])?;
     tx.execute(
         "UPDATE settings SET default_salary_cents = ?1, warning_floor_cents = ?2 WHERE id = 1",
         params![input.default_salary_cents, input.warning_floor_cents],

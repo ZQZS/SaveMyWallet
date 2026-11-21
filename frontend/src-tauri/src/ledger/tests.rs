@@ -1,5 +1,6 @@
 use super::*;
 
+mod ai_capture;
 mod backup;
 
 fn database() -> Connection {
@@ -263,7 +264,7 @@ fn a_failed_installment_rolls_back_the_whole_purchase() {
 fn invalid_billed_periods_roll_back_earlier_bills_and_their_outbox() {
     let mut db = database();
     let platform = add_platform(&db, "测试平台").unwrap();
-    db.execute_batch("INSERT INTO sync_binding VALUES(1,'https://example.invalid','test',1);")
+    db.execute_batch("INSERT INTO sync_binding(singleton,url,ledger_id,cursor) VALUES(1,'https://example.invalid','test',1);")
         .unwrap();
     assert!(add_bills(&mut db, &[]).is_err());
     for (kind, month, index) in [
@@ -310,7 +311,7 @@ fn voiding_a_period_preserves_its_status_and_other_periods_and_retries_are_idemp
         .unwrap()
     };
     db.execute_batch(
-        "INSERT INTO sync_binding VALUES(1,'https://example.invalid','test',1);
+        "INSERT INTO sync_binding(singleton,url,ledger_id,cursor) VALUES(1,'https://example.invalid','test',1);
         INSERT INTO sync_shadow SELECT kind,id,value_json,'seed',1 FROM sync_local;",
     )
     .unwrap();
@@ -398,7 +399,7 @@ fn batch_void_returns_only_selected_changes_in_one_sync_operation() {
     let estimate = entries.pop().unwrap().id;
     set_entry_voided(&mut db, &already_voided, true).unwrap();
     db.execute_batch(
-        "INSERT INTO sync_binding VALUES(1,'https://example.invalid','test',1);
+        "INSERT INTO sync_binding(singleton,url,ledger_id,cursor) VALUES(1,'https://example.invalid','test',1);
          INSERT INTO sync_shadow SELECT kind,id,value_json,'seed',1 FROM sync_local;",
     )
     .unwrap();
@@ -450,7 +451,7 @@ fn batch_void_rolls_back_changes_and_payment_ownership_if_a_selected_id_is_missi
     add_three_period_purchase(&mut db, &platform, "2026-12");
     let id = snapshot(&mut db).unwrap().entries.remove(0).id;
     db.execute_batch(
-        "INSERT INTO sync_binding VALUES(1,'https://example.invalid','test',1);
+        "INSERT INTO sync_binding(singleton,url,ledger_id,cursor) VALUES(1,'https://example.invalid','test',1);
          INSERT INTO sync_shadow SELECT kind,id,value_json,'seed',1 FROM sync_local;",
     )
     .unwrap();
@@ -495,7 +496,7 @@ fn voiding_a_whole_purchase_across_years_is_atomic_and_isolates_identical_purcha
         .unwrap();
     assert_ne!(other.installment_id.as_deref(), Some(series));
     db.execute_batch(
-        "INSERT INTO sync_binding VALUES(1,'https://example.invalid','test',1);
+        "INSERT INTO sync_binding(singleton,url,ledger_id,cursor) VALUES(1,'https://example.invalid','test',1);
          INSERT INTO sync_shadow SELECT kind,id,value_json,'seed',1 FROM sync_local;",
     )
     .unwrap();
@@ -582,7 +583,7 @@ fn a_failed_whole_purchase_void_rolls_back_every_period_and_sync_change() {
     add_three_period_purchase(&mut db, &platform, "2026-12");
     let first = snapshot(&mut db).unwrap().entries.remove(0);
     db.execute_batch(
-        "INSERT INTO sync_binding VALUES(1,'https://example.invalid','test',1);
+        "INSERT INTO sync_binding(singleton,url,ledger_id,cursor) VALUES(1,'https://example.invalid','test',1);
          INSERT INTO sync_shadow SELECT kind,id,value_json,'seed',1 FROM sync_local;
          CREATE TEMP TRIGGER fail_last_void BEFORE UPDATE OF voided ON entries
          WHEN NEW.installment_index=3 AND NEW.voided=1

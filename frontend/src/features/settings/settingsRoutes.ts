@@ -15,6 +15,7 @@ export const settingsRoutes: RouteRecordRaw[] = [
   { path: 'appearance/create', name: 'settings-theme-create', component: () => import('../appearance/ThemeWizard.vue') },
   { path: 'author', name: 'settings-author', component: AuthorSettingsPage },
   { path: 'backup', name: 'settings-backup', component: BackupSettingsPage },
+  { path: 'recovery', name: 'settings-recovery', component: () => import('./RecoverySettingsPage.vue') },
   { path: 'reset', name: 'settings-reset', component: ResetSettingsPage },
   { path: 'ai', name: 'settings-ai', component: AiSettingsPage },
   { path: 'pets', name: 'settings-pets', component: PetSettingsPage },

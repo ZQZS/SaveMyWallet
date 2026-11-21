@@ -18,7 +18,14 @@ public static class LedgerRules
         text is { Length: > 0 } && text.Length <= max &&
         text.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.');
 
-    public static void Validate(IReadOnlyList<SyncRecordEntityDto> current, IReadOnlyList<SyncChangeQueryDto> changes)
+    public static void Validate(IReadOnlyList<SyncRecordEntityDto> current, IReadOnlyList<SyncChangeQueryDto> changes) =>
+        ValidateValues(current, changes, false);
+
+    public static void ValidateReceiptRevert(IReadOnlyList<SyncRecordEntityDto> current, IReadOnlyList<SyncChangeQueryDto> changes) =>
+        ValidateValues(current, changes, true);
+
+    private static void ValidateValues(IReadOnlyList<SyncRecordEntityDto> current, IReadOnlyList<SyncChangeQueryDto> changes,
+        bool verifiedRevert)
     {
         // Platform IDs and names must be checked against the state at the end of the
         // operation: a first-device upload may contain both platforms and their bills.
@@ -29,6 +36,11 @@ public static class LedgerRules
         {
             ValidateId(change.Id);
             if (change.Kind != SyncRecordKind.Platform) continue;
+            if (verifiedRevert && change.After is null)
+            {
+                platforms.Remove(change.Id);
+                continue;
+            }
             if (change.After is not PlatformQueryResultDto platform)
                 throw new LedgerException(400, "invalid_record", "A platform record is required.");
             Require(platform.Id == change.Id, "invalid_id", "Platform IDs must match.");
@@ -52,13 +64,14 @@ public static class LedgerRules
                 case SyncRecordKind.Platform:
                     break;
                 case SyncRecordKind.Entry:
+                    if (verifiedRevert && change.After is null) break;
                     previous.TryGetValue((change.Kind, change.Id), out var old);
                     if (change.After is not BillEntryQueryResultDto entry)
                         throw new LedgerException(400, "invalid_record", "A bill record is required.");
                     ValidateEntry(change.Id, entry, platforms);
-                    if (old?.Value is BillEntryQueryResultDto previousEntry)
+                    if (old?.Value is BillEntryQueryResultDto previousEntry && !verifiedRevert)
                         ValidateTransition(previousEntry, entry);
-                    else if (entry.Kind == BillKind.Installment)
+                    else if (old?.Value is null && entry.Kind == BillKind.Installment)
                         newInstallments.Add(entry);
                     break;
                 case SyncRecordKind.Setting:

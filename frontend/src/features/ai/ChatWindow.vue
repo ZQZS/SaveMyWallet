@@ -85,17 +85,20 @@ watch(detailOptions, (rows, before) => {
   selectedIds.value = new Set(rows.filter(row => selectedIds.value.has(row.id)
     && oldStates.get(row.id) === Boolean(row.detail.voided)).map(row => row.id))
 }, { flush: 'sync' })
-watch(activeConversationId, () => {
+function resetSharing() {
   shareMode.value = 'none'
   selectedIds.value = new Set()
   initializedSelection = false
-}, { flush: 'sync' })
+}
+watch(activeConversationId, resetSharing, { flush: 'sync' })
 watch([() => messages.value.length, activeConversationId], scrollToLatest, { flush: 'post' })
 watch(review, action => {
   if (action) reviewHeading.value?.focus({ preventScroll: true })
 }, { flush: 'post' })
 
 function startChat() {
+  // New chat may reuse the current empty conversation and keep its ID.
+  resetSharing()
   newChat()
   input.value?.focus({ preventScroll: true })
 }

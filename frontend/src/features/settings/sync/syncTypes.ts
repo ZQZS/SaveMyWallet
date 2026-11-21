@@ -20,6 +20,8 @@ export interface SyncConflict {
   changes: SyncChange[]
   records: SyncRecord[]
   requiresRestore?: boolean
+  aiRevert?: boolean
+  restoresPlatforms?: string[]
 }
 
 export interface SyncStatus {
@@ -31,6 +33,7 @@ export interface SyncStatus {
   cursor: number
   undoableIds: string[]
   hasPreviousBackup: boolean
+  previousBackupUndated?: boolean
   conflicts: SyncConflict[]
 }
 

@@ -76,7 +76,7 @@ const comparisons = computed(() => {
 <template>
   <section class="settings-sheet conflict-card" :aria-label="t('syncConflict.title')">
     <h3>{{ t('syncConflict.title') }}</h3>
-    <p class="settings-muted">{{ t('syncConflict.scope', { count: comparisons.length }) }}</p>
+    <p class="settings-muted">{{ t(conflict.aiRevert ? 'syncConflict.aiUndoScope' : 'syncConflict.scope', { count: comparisons.length }) }}</p>
     <section v-for="item in comparisons" :key="item.key" class="record">
       <h4>{{ item.heading }}</h4>
       <div class="comparison">
@@ -91,9 +91,15 @@ const comparisons = computed(() => {
         </section>
       </div>
     </section>
-    <p v-if="conflict.requiresRestore" class="settings-muted">{{ t('error.SYNC_ENTRY_VOIDED') }}</p>
+    <p v-if="conflict.requiresRestore && !conflict.aiRevert" class="settings-muted">{{ t('error.SYNC_ENTRY_VOIDED') }}</p>
+    <div v-if="conflict.restoresPlatforms?.length && !conflict.requiresRestore && !conflict.aiRevert" class="settings-warning">
+      <p>{{ t('syncConflict.restoresPlatforms') }}</p>
+      <ul>
+        <li v-for="name in conflict.restoresPlatforms" :key="name">{{ name }}</li>
+      </ul>
+    </div>
     <div class="settings-actions">
-      <button class="settings-button" type="button" :disabled="disabled || conflict.requiresRestore" @click="emit('resolve', 'local')">{{ t('syncConflict.keepLocal') }}</button>
+      <button class="settings-button" type="button" :disabled="disabled || conflict.requiresRestore || conflict.aiRevert" @click="emit('resolve', 'local')">{{ t('syncConflict.keepLocal') }}</button>
       <button class="settings-button" type="button" :disabled="disabled" @click="emit('resolve', 'server')">{{ t('syncConflict.keepServer') }}</button>
     </div>
   </section>

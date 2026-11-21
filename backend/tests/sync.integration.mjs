@@ -33,6 +33,16 @@ function operation(changes) {
 
 const push = (op, token = primary) => request('/sync/push', { token, method: 'POST', body: op })
 const bootstrap = async (token = primary) => success(await request('/sync/bootstrap', { token }))
+const revert = (op, token = primary) => request('/sync/revert', { token, method: 'POST', body: op })
+const groupId = () => randomUUID().replaceAll('-', '')
+
+function aiOperation(group, changes) {
+  return { operationId: 'ai.' + group + '.' + groupId(), changes }
+}
+
+function undo(originals, changes) {
+  return { operationId: randomUUID(), revertOperationIds: originals.map(op => op.operationId), changes }
+}
 
 function setInstallmentVoided(id, voided, key) {
   return request('/bills/' + encodeURIComponent(id) + '/installment/voided', {
@@ -579,6 +589,120 @@ test('two isolated ledgers sync through the running PostgreSQL API', async t => 
     success(await edit(corrected, restored))
     const pulled = success(await request('/sync/pull?cursor=' + ack.cursor)).records
     assert.deepEqual(pulled.find(record => record.id === estimate.id).value, corrected)
+  })
+
+  await t.test('AI undo verifies both receipts of a group, keeps manual fields and replays one atomic receipt', async () => {
+    assert.equal((await bootstrap()).supportsAiRevert, true)
+    const a = entry(platformId, 'estimate', 'AI 确认尾款')
+    const b = entry(platformId, 'single', 'AI 还款')
+    const created = success(await push(operation([a, b].map(v => change('entry', v.id, v)))))
+    const group = groupId()
+    const confirmed = { ...a, status: 'due' }
+    const paid = { ...b, status: 'paid' }
+    const first = aiOperation(group, [change('entry', a.id, confirmed, created.records[0])])
+    const second = aiOperation(group, [change('entry', b.id, paid, created.records[1])])
+    const firstAck = success(await push(first))
+    const secondAck = success(await push(second))
+    const manualTitle = '手动补记的标题'
+    const manual = success(await push(operation([change('entry', a.id, { ...confirmed, title: manualTitle }, firstAck.records[0])])))
+    const wanted = { ...a, title: manualTitle }
+    const changes = [change('entry', a.id, wanted, manual.records[0]), change('entry', b.id, b, secondAck.records[0])]
+    const op = undo([first, second], changes)
+    // The ordinary sync endpoint still enforces the one-way confirmation transition.
+    assert.equal((await push(operation(changes))).status, 400)
+    for (const wrong of [
+      undo([first], changes.slice(0, 1)),
+      undo([first, second], [{ ...changes[0], after: a }, changes[1]]),
+      undo([first, second], [{ ...changes[0], baseVersion: first.operationId }, changes[1]]),
+      undo([first, aiOperation(group, [])], changes),
+    ]) {
+      const failed = await revert(wrong)
+      assert.deepEqual([failed.status, failed.data.code], [409, 'conflict'])
+    }
+    assert.equal((await revert(undo([first, second], changes.slice(0, 1)))).status, 400)
+    assert.equal((await bootstrap()).cursor, manual.cursor)
+    const foreign = await revert(op, secondary)
+    assert.deepEqual([foreign.status, foreign.data.code], [409, 'conflict'])
+    assert.ok(foreign.data.records.every(r => r.value === null && r.version === null))
+    assert.deepEqual(await bootstrap(secondary), other)
+    assert.equal((await revert({ ...op, seed: true })).status, 400)
+    const [one, two] = await Promise.all([revert({ ...op, seed: false }), revert(op)])
+    const ack = success(one)
+    assert.deepEqual(success(two), ack)
+    assert.equal(ack.operationId, op.operationId)
+    assert.equal(ack.cursor, manual.cursor + 1)
+    assert.deepEqual(ack.records.map(r => r.value), [wanted, b])
+    const pulled = success(await request('/sync/pull?cursor=' + manual.cursor))
+    assert.equal(pulled.supportsAiRevert, true)
+    assert.deepEqual(pulled.records, ack.records)
+    const differentRequest = await revert({ ...op, changes: [{ ...changes[0], after: a }, changes[1]] })
+    assert.deepEqual([differentRequest.status, differentRequest.data.code], [409, 'replay_mismatch'])
+  })
+
+  await t.test('manual edits of an AI-touched field invalidate undo even when its value returns to the same amount', async () => {
+    const bill = entry(platformId, 'estimate', 'ABA 尾款')
+    const created = success(await push(operation([change('entry', bill.id, bill)]))).records[0]
+    const aiValue = { ...bill, amountCents: 41000 }
+    const ai = aiOperation(groupId(), [change('entry', bill.id, aiValue, created)])
+    const aiAck = success(await push(ai))
+    const temporary = { ...bill, amountCents: 23000 }
+    const edited = success(await push(operation([change('entry', bill.id, temporary, aiAck.records[0])])))
+    const manual = operation([change('entry', bill.id, aiValue, edited.records[0])])
+    const latest = success(await push(manual))
+    const inverse = change('entry', bill.id, bill, latest.records[0])
+    const failed = await revert(undo([ai], [inverse]))
+    assert.deepEqual([failed.status, failed.data.code, failed.data.records], [409, 'conflict', latest.records])
+    const notAi = await revert(undo([manual], [change('entry', bill.id, temporary, latest.records[0])]))
+    assert.deepEqual([notAi.status, notAi.data.code], [409, 'conflict'])
+    assert.equal((await bootstrap()).cursor, latest.cursor)
+  })
+
+  await t.test('undo of creates emits null tombstones, preserves manual foreign-key dependants and permits later recreation', async () => {
+    const platform = { id: randomUUID(), name: 'AI 新建测试平台' }
+    const bill = entry(platform.id, 'single', 'AI 测试新增')
+    const ai = aiOperation(groupId(), [change('platform', platform.id, platform), change('entry', bill.id, bill)])
+    const created = success(await push(ai))
+    const removals = created.records.map(r => change(r.kind, r.id, null, r))
+    for (const removal of removals) assert.equal((await push(operation([removal]))).status, 400)
+    const op = undo([ai], removals)
+    const ack = success(await revert(op))
+    const tombstones = created.records.map(r => ({ kind: r.kind, id: r.id, value: null, version: null }))
+    assert.deepEqual(ack.records, tombstones)
+    assert.deepEqual(success(await revert(op)), ack)
+    assert.deepEqual(success(await request('/sync/pull?cursor=' + created.cursor)).records, tombstones)
+    assert.ok(!(await bootstrap()).records.some(r => r.id === platform.id || r.id === bill.id))
+    const offline = entry(platform.id, 'single', '另一设备离线新增的账单')
+    const stale = await push(operation([change('entry', offline.id, offline)]))
+    assert.deepEqual([stale.status, stale.data.code, stale.data.records], [409, 'conflict',
+      [{ kind: 'entry', id: offline.id, value: null, version: null }]])
+    const invalid = { ...offline, platformId: randomUUID() }
+    const unknown = await push(operation([change('entry', invalid.id, invalid)]))
+    assert.deepEqual([unknown.status, unknown.data.code], [400, 'unknown_platform'])
+    assert.equal((await bootstrap()).cursor, ack.cursor)
+    const recreated = aiOperation(groupId(), [change('platform', platform.id, platform)])
+    const latest = success(await push(recreated))
+    const manual = success(await push(operation([change('entry', bill.id, bill)])))
+    const blocked = await revert(undo([recreated], [change('platform', platform.id, null, latest.records[0])]))
+    assert.deepEqual([blocked.status, blocked.data.code], [409, 'conflict'])
+    const snapshot = await bootstrap()
+    assert.equal(snapshot.cursor, manual.cursor)
+    assert.deepEqual(snapshot.records.find(r => r.id === bill.id), manual.records[0])
+    assert.deepEqual(snapshot.records.find(r => r.id === platform.id), latest.records[0])
+  })
+
+  await t.test('a new manual installment in the AI-created series blocks deletion on another device', async () => {
+    const first = { ...entry(platformId, 'installment', 'AI 分期'),
+      installmentId: groupId(), installmentIndex: 1, installmentCount: 2 }
+    const ai = aiOperation(groupId(), [change('entry', first.id, first)])
+    const created = success(await push(ai))
+    const next = { ...first, id: randomUUID(), month: '2027-01', installmentIndex: 2 }
+    const manual = success(await push(operation([change('entry', next.id, next)])))
+    const denied = await revert(undo([ai], [change('entry', first.id, null, created.records[0])]))
+    assert.deepEqual([denied.status, denied.data.code], [409, 'conflict'])
+    const snapshot = await bootstrap()
+    assert.equal(snapshot.cursor, manual.cursor)
+    assert.deepEqual(snapshot.records.find(r => r.id === first.id), created.records[0])
+    assert.deepEqual(snapshot.records.find(r => r.id === next.id), manual.records[0])
   })
 
   await t.test('authorization scopes snapshots, changes and operation receipts to the selected ledger', async () => {

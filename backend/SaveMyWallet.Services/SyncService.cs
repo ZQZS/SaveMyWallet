@@ -21,4 +21,14 @@ public sealed class SyncService(ISyncStore store) : ISyncService
         SyncRules.ValidateOperation(operation);
         return store.PushAsync(ledgerId, operation, ct);
     }
+
+    public Task<PushQueryResultDto> RevertAsync(string ledgerId, RevertOperationQueryDto operation, CancellationToken ct)
+    {
+        SyncRules.ValidateOperation(new SyncOperationQueryDto(operation.OperationId, operation.Changes));
+        if (operation.Seed || operation.RevertOperationIds is not { Count: > 0 } ids || ids.Count > operation.Changes.Count ||
+            ids.Distinct().Count() != ids.Count || ids.Contains(operation.OperationId))
+            throw new LedgerException(400, "invalid_revert", "Expected the original operations for one AI action.");
+        foreach (var id in ids) SyncRules.CheckOperationId(id);
+        return store.RevertAsync(ledgerId, operation, ct);
+    }
 }

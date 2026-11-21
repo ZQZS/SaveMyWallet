@@ -34,6 +34,31 @@ pub(super) fn requires_restore(pairs: &[(Change, Record)]) -> bool {
     })
 }
 
+pub(super) fn missing_parents(
+    conn: &Connection,
+    changes: &[Change],
+) -> StorageResult<BTreeMap<String, Value>> {
+    let ids: BTreeSet<_> = changes
+        .iter()
+        .filter(|c| c.kind == "entry")
+        .filter_map(|c| c.after["platformId"].as_str())
+        .collect();
+    let mut query = conn.prepare_cached(
+        "SELECT l.value_json FROM sync_shadow s JOIN sync_local l USING(kind,id)
+         WHERE s.kind='platform' AND s.id=? AND s.value_json='null'",
+    )?;
+    let mut parents = BTreeMap::new();
+    for id in ids {
+        if let Some(value) = query
+            .query_row([id], |r| decode_json(r.get(0)?))
+            .optional()?
+        {
+            parents.insert(id.to_owned(), value);
+        }
+    }
+    Ok(parents)
+}
+
 fn reply_cursor(conn: &Connection, reply: &Value) -> StorageResult<i64> {
     let cursor = reply["cursor"].as_i64().unwrap_or(ledger_cursor(conn)?.1);
     if cursor < 0 {
@@ -115,6 +140,12 @@ fn desired(change: &Change, base: &Value) -> Value {
 }
 
 fn delete_change(conn: &Connection, op: &str, change: &Change) -> StorageResult<()> {
+    // Rebasing a pending AI edit onto an identical remote write can eliminate it
+    // before it is ever sent. There will be no ACK to disown this journal row.
+    conn.execute(
+        "UPDATE ai_undo_change SET conflicted=1 WHERE sync_operation_id=? AND kind=? AND id=?",
+        params![op, change.kind, change.id],
+    )?;
     conn.execute(
         "DELETE FROM sync_changes WHERE operation_id=? AND kind=? AND id=?",
         params![op, change.kind, change.id],
@@ -198,10 +229,18 @@ pub fn ack(conn: &mut Connection, response: &Value) -> StorageResult<()> {
     let op = operation(&tx, id)?;
     let changed: BTreeSet<String> = serde_json::from_value(response["changedIds"].clone())?;
     let pairs = matched(&op, response)?;
+    super::super::history::checkpoint(&tx)?;
     tx.execute("DELETE FROM sync_queue WHERE operation_id=?", [id])?;
     for (change, record) in pairs {
         if change.after != record.value {
             return Err("SYNC_INVALID_RESPONSE".into());
+        }
+        if !changed.contains(&record.id) || record.version.as_deref() != Some(id) {
+            // An identical concurrent write belongs to the peer that committed it.
+            tx.execute(
+                "UPDATE ai_undo_change SET conflicted=1 WHERE sync_operation_id=? AND kind=? AND id=?",
+                params![id, record.kind, record.id],
+            )?;
         }
         remember(&tx, &record, cursor)?;
         let skip_undo = if is_payment(&change) && !changed.contains(&record.id) {
@@ -216,8 +255,9 @@ pub fn ack(conn: &mut Connection, response: &Value) -> StorageResult<()> {
         } else {
             shadow(&tx, &local.kind, &local.id)?
         };
-        records::apply(&tx, &projection)?;
+        project(&tx, &projection)?;
     }
+    remove_unused_remote_deletions(&tx)?;
     tx.commit()?;
     Ok(())
 }
@@ -252,7 +292,11 @@ pub fn resolve(conn: &mut Connection, id: &str, choice: &str) -> StorageResult<(
     let (seq,mut stored): (i64,Value) = tx.query_row(
         "SELECT seq,conflict_json FROM sync_queue WHERE operation_id=? AND conflict_json IS NOT NULL",
         [id], |r| Ok((r.get(0)?,decode_json(r.get(1)?)?))).optional()?.ok_or("SYNC_CONFLICT_CHANGED")?;
-    let pairs = matched(&operation(&tx, id)?, &stored)?;
+    let op = operation(&tx, id)?;
+    if choice == "local" && op.revert_operation_ids.is_some() {
+        return Err("AI_UNDO_SYNC_CONFLICT".into());
+    }
+    let pairs = matched(&op, &stored)?;
     let mut latest = vec![];
     let mut stale = false;
     for (_, r) in &pairs {
@@ -272,9 +316,16 @@ pub fn resolve(conn: &mut Connection, id: &str, choice: &str) -> StorageResult<(
     if choice == "local" && requires_restore(&pairs) {
         return Err("SYNC_ENTRY_VOIDED".into());
     }
+    super::super::history::checkpoint(&tx)?;
     // Preserve sequence relative to dependent local edits; a decision is a fresh
     // request, with the server version the user has just reviewed.
     let replacement = fresh_id(&tx)?;
+    // A conflict decision changes the provenance of this operation. An old AI
+    // journal must not reverse a human's later choice, even if its value matches.
+    tx.execute(
+        "UPDATE ai_undo_change SET conflicted=1 WHERE sync_operation_id=?",
+        [id],
+    )?;
     if choice == "local" {
         tx.execute(
             "UPDATE sync_last_payment SET operation_id=? WHERE operation_id=?",
@@ -289,6 +340,23 @@ pub fn resolve(conn: &mut Connection, id: &str, choice: &str) -> StorageResult<(
         "UPDATE sync_queue SET operation_id=?,conflict_json=NULL,seed=0 WHERE operation_id=?",
         params![replacement, id],
     )?;
+    if choice == "local" {
+        // Keeping an offline bill also restores the deleted platform shown in
+        // its conflict preview. Send parent and bill in one server transaction.
+        for (id, value) in missing_parents(&tx, &op.changes)? {
+            store_change(
+                &tx,
+                &replacement,
+                &Change {
+                    kind: "platform".into(),
+                    id,
+                    base_version: None,
+                    before: Value::Null,
+                    after: value,
+                },
+            )?;
+        }
+    }
     for (old, mut base) in pairs {
         let value = desired(&old, &base.value);
         if choice == "local" && value != base.value {
@@ -308,8 +376,9 @@ pub fn resolve(conn: &mut Connection, id: &str, choice: &str) -> StorageResult<(
             delete_change(&tx, &replacement, &old)?;
         }
         let local = rebase(&tx, seq, base, None)?;
-        records::apply(&tx, &local)?;
+        project(&tx, &local)?;
     }
+    remove_unused_remote_deletions(&tx)?;
     tx.commit()?;
     Ok(())
 }

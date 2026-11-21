@@ -1,4 +1,4 @@
-use super::{read_ledger, Ledger, StorageResult};
+use super::{read_ledger, Ledger, LedgerTransaction, StorageResult};
 use rusqlite::{Connection, Transaction, TransactionBehavior};
 use serde::Serialize;
 
@@ -8,7 +8,7 @@ pub(crate) struct ReviewedLedger {
     revision: String,
 }
 
-fn revision(conn: &Connection) -> StorageResult<String> {
+pub(super) fn revision(conn: &Connection) -> StorageResult<String> {
     // total_changes tracks this connection's writes, data_version other connections' commits.
     let external: i64 = conn.query_row("PRAGMA main.data_version", [], |row| row.get(0))?;
     Ok(format!("{}:{external}", conn.total_changes()))
@@ -35,21 +35,17 @@ impl<'a> LedgerWrite<'a> {
         }
     }
 
-    pub(super) fn begin(self, behavior: TransactionBehavior) -> StorageResult<Transaction<'a>> {
-        // Acquire SQLite's writer lock before checking a reviewed action. A sync
-        // pull or a second app instance cannot change its target before commit.
-        let behavior = if self.expected.is_some() {
-            TransactionBehavior::Immediate
-        } else {
-            behavior
-        };
-        let tx = Transaction::new_unchecked(self.connection, behavior)?;
+    pub(super) fn begin(self, action: &'static str) -> StorageResult<LedgerTransaction<'a>> {
+        // Hold the same writer lock through revision checking, the day boundary and
+        // the mutation, including when a second process has the ledger open.
+        let tx = Transaction::new_unchecked(self.connection, TransactionBehavior::Immediate)?;
         if let Some(expected) = self.expected {
             if revision(&tx)? != expected {
                 return Err("AI_ACTION_STALE".into());
             }
         }
-        Ok(tx)
+        super::history::checkpoint(&tx)?;
+        LedgerTransaction::new(tx, self.expected.map(|_| action))
     }
 }
 
@@ -107,7 +103,7 @@ mod tests {
         other.busy_timeout(Duration::ZERO).unwrap();
         let reviewed = snapshot(&mut conn).unwrap();
         let tx = LedgerWrite::new(&conn, Some(&reviewed.revision))
-            .begin(TransactionBehavior::Deferred)
+            .begin("create_platform")
             .unwrap();
         let blocked = other
             .execute("UPDATE settings SET warning_floor_cents=1", [])

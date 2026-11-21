@@ -14,5 +14,7 @@ internal static class SyncEndpoints
             service.PullAsync(LedgerAccess.Id(ctx), cursor, ct));
         app.MapPost("/sync/push", (SyncOperationQueryDto operation, HttpContext ctx, ISyncService service, CancellationToken ct) =>
             service.PushAsync(LedgerAccess.Id(ctx), operation, ct));
+        app.MapPost("/sync/revert", (RevertOperationQueryDto operation, HttpContext ctx, ISyncService service, CancellationToken ct) =>
+            service.RevertAsync(LedgerAccess.Id(ctx), operation, ct));
     }
 }

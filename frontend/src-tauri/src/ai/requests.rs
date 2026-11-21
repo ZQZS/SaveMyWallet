@@ -4,6 +4,21 @@ use tokio::task::AbortHandle;
 #[derive(Default)]
 pub(crate) struct AiRequests(Mutex<HashMap<String, AbortHandle>>);
 
+struct ActiveRequest<'a> {
+    id: String,
+    requests: &'a AiRequests,
+}
+
+impl Drop for ActiveRequest<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut active) = self.requests.0.lock() {
+            if let Some(handle) = active.remove(&self.id) {
+                handle.abort();
+            }
+        }
+    }
+}
+
 impl AiRequests {
     pub(super) async fn run<T: Send + 'static>(
         &self,
@@ -27,9 +42,9 @@ impl AiRequests {
             active.insert(id.clone(), task.abort_handle());
             task
         };
-        let result = task.await;
-        self.0.lock().map_err(|_| "AI_PROVIDER")?.remove(&id);
-        match result {
+        // A dropped caller also owns the lifetime of its provider request.
+        let _registration = ActiveRequest { id, requests: self };
+        match task.await {
             Ok(result) => result,
             Err(error) if error.is_cancelled() => Err("AI_CANCELLED".into()),
             Err(_) => Err("AI_PROVIDER".into()),
@@ -48,6 +63,34 @@ impl AiRequests {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn dropping_the_caller_stops_the_provider_and_releases_its_id() {
+        tauri::async_runtime::block_on(async {
+            let requests = Arc::new(AiRequests::default());
+            let pending = requests.clone();
+            let (started, ready) = tokio::sync::oneshot::channel();
+            let (alive, stopped) = tokio::sync::oneshot::channel::<()>();
+            let caller = tokio::spawn(async move {
+                pending
+                    .run("dropped".into(), async {
+                        let _alive = alive;
+                        started.send(()).unwrap();
+                        std::future::pending::<Result<(), String>>().await
+                    })
+                    .await
+            });
+            ready.await.unwrap();
+            caller.abort();
+            assert!(caller.await.unwrap_err().is_cancelled());
+            assert!(requests.0.lock().unwrap().is_empty());
+            assert!(tokio::time::timeout(std::time::Duration::from_secs(2), stopped)
+                .await
+                .expect("provider future is still running")
+                .is_err());
+            assert_eq!(requests.run("dropped".into(), async { Ok(3) }).await, Ok(3));
+        });
+    }
 
     #[test]
     fn cancel_only_aborts_the_named_request_and_releases_its_id() {

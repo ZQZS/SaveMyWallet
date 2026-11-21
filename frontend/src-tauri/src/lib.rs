@@ -3,6 +3,8 @@ mod backup_files;
 mod ledger;
 mod reminders;
 mod sync_client;
+#[cfg(test)]
+mod recovery_access_tests;
 
 use ledger::review::{LedgerWrite, ReviewedLedger};
 use ledger::{BillInput, BudgetInput, ConfirmInput, Ledger, StorageResult};
@@ -17,6 +19,18 @@ struct Database {
 
 impl Database {
     fn access<T>(
+        &self,
+        operation: impl FnOnce(&mut Connection) -> StorageResult<T>,
+    ) -> Result<T, String> {
+        self.with_connection(|conn| {
+            // Keep reads available if archiving fails. Ledger writes check the boundary again
+            // inside their transaction and cannot overwrite an unarchived day.
+            let _ = ledger::history::observe(conn);
+            operation(conn)
+        })
+    }
+
+    fn with_connection<T>(
         &self,
         operation: impl FnOnce(&mut Connection) -> StorageResult<T>,
     ) -> Result<T, String> {
@@ -175,6 +189,40 @@ fn export_backup(db: State<'_, Database>) -> Result<String, String> {
 }
 
 #[tauri::command(async)]
+fn preview_last_ai_undo(
+    db: State<'_, Database>,
+) -> Result<Option<ledger::ai_undo::AiUndoPreview>, String> {
+    db.access(ledger::ai_undo::preview)
+}
+
+#[tauri::command(async)]
+fn undo_last_ai_change(db: State<'_, Database>, token: String) -> Result<(), String> {
+    db.access(|conn| ledger::ai_undo::apply(conn, &token))
+}
+
+#[tauri::command(async)]
+fn maintain_ledger_history(db: State<'_, Database>) -> Result<(), String> {
+    db.with_connection(ledger::history::observe)
+}
+
+#[tauri::command(async)]
+fn list_ledger_restore_points(
+    db: State<'_, Database>,
+) -> Result<Vec<ledger::history::RestorePoint>, String> {
+    db.access(ledger::history::list)
+}
+
+#[tauri::command(async)]
+fn restore_ledger_point(
+    db: State<'_, Database>,
+    days_ago: u8,
+    date: String,
+    revision: String,
+) -> Result<(), String> {
+    db.access(|conn| ledger::history::restore(conn, days_ago, &date, &revision))
+}
+
+#[tauri::command(async)]
 fn preview_backup(contents: String) -> Result<ledger::backup::BackupPreview, String> {
     ledger::backup::preview(&contents).map_err(|error| error.to_string())
 }
@@ -248,6 +296,11 @@ pub fn run() {
             undo_payment,
             save_budget,
             export_backup,
+            maintain_ledger_history,
+            preview_last_ai_undo,
+            undo_last_ai_change,
+            list_ledger_restore_points,
+            restore_ledger_point,
             preview_backup,
             import_backup,
             reset_ledger,

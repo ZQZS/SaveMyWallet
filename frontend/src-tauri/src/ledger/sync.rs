@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod ai_revert;
+mod publish;
+pub(super) use ai_revert::{apply_local_undo_value, capture_undo, check_ai_undo, tag_ai_queue};
 mod reconcile;
 mod records;
 #[cfg(test)]
@@ -34,6 +37,8 @@ struct Change {
 struct Operation {
     operation_id: String,
     seed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    revert_operation_ids: Option<Vec<String>>,
     changes: Vec<Change>,
 }
 
@@ -43,6 +48,8 @@ struct Page {
     ledger_id: String,
     cursor: i64,
     records: Vec<Record>,
+    #[serde(default)]
+    supports_ai_revert: bool,
 }
 
 pub(super) fn bound(conn: &Connection) -> StorageResult<bool> {
@@ -116,10 +123,10 @@ fn read_change(row: &rusqlite::Row<'_>) -> rusqlite::Result<Change> {
 }
 
 fn operation(conn: &Connection, id: &str) -> StorageResult<Operation> {
-    let seed = conn.query_row(
-        "SELECT seed FROM sync_queue WHERE operation_id=?",
+    let (seed, sources): (bool, Option<String>) = conn.query_row(
+        "SELECT seed,revert_operation_ids FROM sync_queue WHERE operation_id=?",
         [id],
-        |r| r.get(0),
+        |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
     let mut query = conn.prepare(
         "SELECT kind,id,base_version,before_json,after_json FROM sync_changes
@@ -131,6 +138,7 @@ fn operation(conn: &Connection, id: &str) -> StorageResult<Operation> {
     Ok(Operation {
         operation_id: id.to_owned(),
         seed,
+        revert_operation_ids: sources.as_deref().map(serde_json::from_str).transpose()?,
         changes,
     })
 }
@@ -170,7 +178,7 @@ pub(super) fn capture<'a>(
             )
             .optional()?
             .unwrap_or(Value::Null);
-        if before == after {
+        if before == after || kind == "setting" && before.is_null() && after == 0 {
             continue;
         }
         if op.is_none() {
@@ -223,6 +231,61 @@ fn pending_for(conn: &Connection, record: &Record) -> StorageResult<bool> {
     )?)
 }
 
+fn project(conn: &Connection, record: &Record) -> StorageResult<()> {
+    // A published AI platform was removed locally, but another device attached
+    // a bill before the server accepted its removal. Project the authoritative
+    // parent with the incoming bill while the receipt-checked revert is pending.
+    if record.kind == "entry" {
+        if let Some(id) = record.value["platformId"].as_str() {
+            let mut parent = conn.prepare_cached(
+                "SELECT s.value_json FROM sync_shadow s WHERE s.kind='platform' AND s.id=?1
+                 AND s.value_json<>'null' AND NOT EXISTS(SELECT 1 FROM platforms WHERE id=?1)
+                 AND EXISTS(SELECT 1 FROM sync_changes c JOIN sync_queue q USING(operation_id)
+                    WHERE c.kind='platform' AND c.id=?1 AND c.after_json='null' AND q.revert_operation_ids IS NOT NULL)")?;
+            let missing = parent
+                .query_row([id], |r| decode_json(r.get(0)?))
+                .optional()?;
+            if let Some(value) = missing {
+                records::apply(
+                    conn,
+                    &Record {
+                        kind: "platform".into(),
+                        id: id.into(),
+                        value,
+                        version: None,
+                    },
+                )?;
+            }
+        }
+    }
+    if record.kind == "platform" && record.value.is_null() {
+        // Keep the local parent of an offline bill until the user resolves the
+        // bill's conflict. A remote deletion cannot cascade into manual work.
+        let pending_children: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM entries WHERE platform_id=?1) AND NOT EXISTS(
+                SELECT 1 FROM entries e WHERE e.platform_id=?1 AND NOT EXISTS(
+                    SELECT 1 FROM sync_changes c WHERE c.kind='entry' AND c.id=e.id))",
+            [&record.id],
+            |r| r.get(0),
+        )?;
+        if pending_children {
+            return Ok(());
+        }
+    }
+    records::apply(conn, record)
+}
+
+fn remove_unused_remote_deletions(conn: &Connection) -> StorageResult<()> {
+    conn.execute(
+        "DELETE FROM platforms AS p WHERE p.id IN (
+        SELECT id FROM sync_shadow WHERE kind='platform' AND value_json='null')
+        AND NOT EXISTS(SELECT 1 FROM entries e WHERE e.platform_id=p.id)
+        AND NOT EXISTS(SELECT 1 FROM sync_changes c WHERE c.kind='platform' AND c.id=p.id)",
+        [],
+    )?;
+    Ok(())
+}
+
 fn apply_page(tx: &Transaction<'_>, mut page: Page) -> StorageResult<()> {
     let (ledger_id, cursor) = ledger_cursor(tx)?;
     if page.ledger_id != ledger_id || page.cursor < cursor {
@@ -235,13 +298,22 @@ fn apply_page(tx: &Transaction<'_>, mut page: Page) -> StorageResult<()> {
         last.insert((r.kind.clone(), r.id.clone()), r);
     }
     let mut records: Vec<_> = last.into_values().collect();
+    let removed_entries = records
+        .iter()
+        .any(|r| r.kind == "entry" && r.value.is_null());
     records.sort_by_key(records::apply_order);
     for record in records {
         if remember(tx, &record, page.cursor)? && !pending_for(tx, &record)? {
-            records::apply(tx, &record)?;
+            project(tx, &record)?;
         }
     }
-    tx.execute("UPDATE sync_binding SET cursor=?", [page.cursor])?;
+    if removed_entries {
+        remove_unused_remote_deletions(tx)?;
+    }
+    tx.execute(
+        "UPDATE sync_binding SET cursor=?,supports_ai_revert=?",
+        params![page.cursor, page.supports_ai_revert],
+    )?;
     Ok(())
 }
 
@@ -273,34 +345,30 @@ pub fn bind_checked(
     if data_stamp(&tx)? != expected_stamp {
         return Err("SYNC_PREVIEW_STALE".into());
     }
+    let offline_changes = if mode == "publish" && page.cursor == 0 && page.records.is_empty() {
+        super::ai_undo_capture::expire(&tx, chrono::Local::now().date_naive())?;
+        super::ai_undo::changes_for_publish(&tx)?
+    } else {
+        Vec::new()
+    };
     tx.execute(
-        "INSERT INTO sync_binding VALUES (1,?,?,0)",
-        params![url, page.ledger_id],
+        "INSERT INTO sync_binding(singleton,url,ledger_id,cursor,supports_ai_revert) VALUES (1,?,?,0,?)",
+        params![url, page.ledger_id,page.supports_ai_revert],
     )?;
     match mode {
         "publish" if page.cursor == 0 && page.records.is_empty() => {
-            let seed = new_queue_row(&tx, true)?;
-            let mut query = tx.prepare("SELECT kind,id,value_json FROM sync_local")?;
-            let mut rows = query.query([])?;
-            while let Some(r) = rows.next()? {
-                store_change(
-                    &tx,
-                    &seed,
-                    &Change {
-                        kind: r.get(0)?,
-                        id: r.get(1)?,
-                        base_version: None,
-                        before: Value::Null,
-                        after: decode_json(r.get(2)?)?,
-                    },
-                )?;
-            }
+            publish::enqueue(&tx, &offline_changes)?;
         }
         "replace" if page.cursor > 0 => {
+            super::history::checkpoint(&tx)?;
             let backup = backup::encode(read_ledger(&tx)?)?;
-            tx.execute("INSERT OR REPLACE INTO sync_recovery VALUES(1,?)", [backup])?;
+            tx.execute(
+                "INSERT OR REPLACE INTO sync_recovery (singleton,contents,created_day) VALUES (1,?,?)",
+                params![backup, chrono::Local::now().date_naive().to_string()],
+            )?;
             tx.execute_batch(
-                "DELETE FROM entries; DELETE FROM platforms; DELETE FROM salary_overrides;
+                "DELETE FROM ai_undo_operation;
+                 DELETE FROM entries; DELETE FROM platforms; DELETE FROM salary_overrides;
                               UPDATE settings SET default_salary_cents=0, warning_floor_cents=0;",
             )?;
             apply_page(&tx, page)?;
@@ -313,8 +381,12 @@ pub fn bind_checked(
 }
 
 pub fn previous_backup(conn: &Connection) -> StorageResult<Option<String>> {
+    let cutoff = super::history::retention_start(chrono::Local::now().date_naive())?;
     Ok(conn
-        .query_row("SELECT contents FROM sync_recovery", [], |r| r.get(0))
+        .query_row(
+            "SELECT contents FROM sync_recovery WHERE coalesce(created_day,legacy_retention_day) >= ?",
+            [cutoff], |r| r.get(0),
+        )
         .optional()?)
 }
 
@@ -340,9 +412,15 @@ pub fn status(conn: &Connection) -> StorageResult<Value> {
         let candidates = decode_json(r.get(1)?)?;
         let op = operation(conn, &id)?;
         let pairs = reconcile::matched(&op, &candidates)?;
+        let parents = reconcile::missing_parents(conn, &op.changes)?;
+        let restores_platforms: Vec<_> = parents
+            .values()
+            .filter_map(|platform| platform["name"].as_str())
+            .collect();
         conflicts.push(
             json!({"operationId": id, "changes": op.changes, "records": candidates["records"],
-            "requiresRestore": reconcile::requires_restore(&pairs)}),
+            "requiresRestore": reconcile::requires_restore(&pairs), "aiRevert": op.revert_operation_ids.is_some(),
+            "restoresPlatforms": restores_platforms}),
         );
     }
     let (url, ledger, cursor) = binding
@@ -352,9 +430,14 @@ pub fn status(conn: &Connection) -> StorageResult<Value> {
         .prepare("SELECT entry_id FROM sync_undoable ORDER BY entry_id")?
         .query_map([], |r| r.get(0))?
         .collect::<rusqlite::Result<Vec<String>>>()?;
+    let cutoff = super::history::retention_start(chrono::Local::now().date_naive())?;
+    let undated: Option<bool> = conn.query_row(
+        "SELECT created_day IS NULL FROM sync_recovery WHERE coalesce(created_day,legacy_retention_day) >= ?",
+        [cutoff], |r| r.get(0),
+    ).optional()?;
     Ok(
         json!({"bound":url.is_some(),"url":url,"ledgerId":ledger,"cursor":cursor,"pending":pending,"conflicts":conflicts,"undoableIds":undoable,
-        "hasPreviousBackup": conn.query_row("SELECT EXISTS(SELECT 1 FROM sync_recovery)", [], |r| r.get::<_,bool>(0))?}),
+        "hasPreviousBackup": undated.is_some(), "previousBackupUndated": undated.unwrap_or(false)}),
     )
 }
 
@@ -453,7 +536,11 @@ pub fn pull(conn: &mut Connection, page: &Value) -> StorageResult<()> {
 pub fn pull_for(conn: &mut Connection, url: &str, ledger: &str, page: &Value) -> StorageResult<()> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     require_endpoint(&tx, url, ledger)?;
-    apply_page(&tx, serde_json::from_value(page.clone())?)?;
+    let page: Page = serde_json::from_value(page.clone())?;
+    if !page.records.is_empty() {
+        super::history::checkpoint(&tx)?;
+    }
+    apply_page(&tx, page)?;
     tx.commit()?;
     Ok(())
 }

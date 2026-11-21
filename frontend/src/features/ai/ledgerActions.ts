@@ -197,7 +197,7 @@ export function createLedgerActionScope(session: LedgerSession, month: string, s
         if (changedCount === 0) outcome = 'unchanged'
         else if (changedCount !== undefined && approved.expectedCount && changedCount < approved.expectedCount) outcome = 'partial'
         else outcome = 'applied'
-        if (name === 'undo_last_payment' || name === 'update_budget') session.lastPayment.value = null
+        if (name === 'undo_last_payment') session.lastPayment.value = null
         else if (changed?.length && (name === 'mark_bills_paid' || name === 'mark_bills_unpaid')) {
           session.lastPayment.value = { month, ids: changed, paid: name === 'mark_bills_paid' }
         } else if (changed?.length) session.invalidatePaymentUndo(changed)

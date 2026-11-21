@@ -3,6 +3,7 @@ import { locale } from '../../i18n/index.ts'
 import { builtinPets, type PetCharacter } from './catalog.ts'
 import { parsePetCard, PetCardImportError } from './cardImport.ts'
 import { petStorage, type SavedPetCard } from './petStorage.ts'
+import { forgetPetChats } from './usePetChat.ts'
 
 const preferenceKey = 'savemywallet.pets.preferences'
 const storageError = ref(false)
@@ -143,6 +144,7 @@ async function removePet(id: string): Promise<void> {
     throw new Error('pets.import.storage')
   }
   imported.value = imported.value.filter(item => item.id !== card.id)
+  forgetPetChats(id)
   if (card.avatar) URL.revokeObjectURL(card.avatar)
   if (preferences.value.selectedId === id) selectPet('wallet-cat')
 }

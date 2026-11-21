@@ -22,18 +22,29 @@ interface Conversation {
   id: number
   draft: string
   exchanges: Exchange[]
+  inFlight: number
 }
 
 function emptyChat(id: number): Conversation {
-  return { id, draft: '', exchanges: [] }
+  return { id, draft: '', exchanges: [], inFlight: 0 }
 }
 
-function newChatList() {
-  return reactive({ chats: [emptyChat(1)], selectedIndex: 0 })
+function unusedChat(chat: Conversation) {
+  return !chat.draft && !chat.exchanges.length && !chat.inFlight
+}
+
+function newChatList(petId: string | null) {
+  return reactive({ petId, chats: [emptyChat(1)], selectedIndex: 0, openViews: 0 })
 }
 
 // General chat and each pet keep separate in-memory conversations for each month.
 const chatLists = new Map<string, ReturnType<typeof newChatList>>()
+
+export function forgetPetChats(petId: string) {
+  for (const [key, list] of chatLists) {
+    if (list.petId === petId) chatLists.delete(key)
+  }
+}
 
 function messagesFor(exchanges: Exchange[], forModel = false): PetChatMessage[] {
   return exchanges.flatMap(({ question, reply, contextReply }) => [
@@ -66,7 +77,8 @@ function useConversation(
   request: (input: Omit<AgentChatInput, 'mode' | 'character'>, signal: AbortSignal, runAction?: RunLedgerAction) => Promise<string>,
 ) {
   const key = JSON.stringify([petId, month])
-  const list = chatLists.get(key) ?? newChatList()
+  const list = chatLists.get(key) ?? newChatList(petId)
+  list.openViews++
   chatLists.set(key, list)
   const current = computed(() => list.chats[list.selectedIndex])
   const activeConversationId = computed(() => current.value.id)
@@ -94,10 +106,22 @@ function useConversation(
     pendingQuestion.value = ''
     error.value = ''
   }
-  onScopeDispose(stop)
+  function releaseEmptyList() {
+    if (!list.openViews && list.chats.every(unusedChat) && chatLists.get(key) === list) chatLists.delete(key)
+  }
+  onScopeDispose(() => {
+    stop()
+    list.openViews--
+    releaseEmptyList()
+  })
 
   function newChat() {
     stop()
+    const emptyIndex = list.chats.findIndex(unusedChat)
+    if (emptyIndex >= 0) {
+      list.selectedIndex = emptyIndex
+      return
+    }
     list.chats.push(emptyChat(list.chats.length + 1))
     list.selectedIndex = list.chats.length - 1
   }
@@ -126,6 +150,7 @@ function useConversation(
     const context = messagesFor(recent.slice(first), true)
     context.push({ role: 'user', content: question })
     const controller = new AbortController()
+    conversation.inFlight++
     active = controller
     pendingQuestion.value = question
     error.value = ''
@@ -188,6 +213,8 @@ function useConversation(
       if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : 'AI_UNAVAILABLE'
       return false
     } finally {
+      conversation.inFlight--
+      releaseEmptyList()
       if (active === controller) {
         active = undefined
         pendingQuestion.value = ''

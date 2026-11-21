@@ -77,6 +77,15 @@ test('a changed, moved or unselected row cannot be written after the preview', a
   assert.equal(writes.length, 0)
 })
 
+test('approving an AI budget change preserves an independent manual payment undo', async () => {
+  const { session, guarded, scope } = await app([bill('manual', { status: 'paid' })])
+  const manual = { month, ids: ['manual'], paid: true }
+  session.lastPayment.value = manual
+  guarded.saveBudget = async () => {}
+  await scope([]).prepare('update_budget', { warningFloorCents: 5000 }).apply()
+  assert.deepEqual(session.lastPayment.value, manual)
+})
+
 test('an undo that no longer owns the entire batch reports only the actual changes', async () => {
   const { scope, guarded, session } = await app([bill('a', { status: 'paid' }), bill('b', { status: 'paid' })])
   session.lastPayment.value = { ids: ['a', 'b'], month, paid: true }

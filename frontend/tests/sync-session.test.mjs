@@ -68,7 +68,7 @@ test('同步只保留仍属于本机的撤销权，已确认自己的更改仍�
   await sync.run()
   assert.deepEqual(ledger.lastPayment.value.ids, ['first', 'second'])
   result = { ...linked, cursor: 9, undoableIds: ['second'] }
-  await sync.run()
+  await sync.resolve('conflicting-first-payment', 'server')
   assert.deepEqual(ledger.lastPayment.value.ids, ['second'])
   result = { ...linked, cursor: 10, undoableIds: [] }
   await sync.run()

@@ -25,7 +25,7 @@ export function createSyncSession(invoke: SyncInvoke, ledger: LedgerSession, can
     const next = await invoke<SyncStatus>(command, args)
     status.value = next
     if (priorPayment && priorPayment === ledger.lastPayment.value) {
-      if (['sync_bind', 'sync_disconnect', 'sync_resolve'].includes(command)) {
+      if (command === 'sync_bind' || command === 'sync_disconnect') {
         ledger.lastPayment.value = null
       } else if (next.bound) {
         // A server no-op or a later payment by another device can revoke just part of a batch.
