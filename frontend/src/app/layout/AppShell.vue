@@ -1,16 +1,38 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { Database, WalletCards } from 'lucide-vue-next'
 import MenuNav from './MenuNav.vue'
 import { useLedgerSession } from '../ledgerSession'
 import { useSyncSession } from '../syncSession'
+import { currentMonth } from '../../domain/ledger'
 import { t } from '../../i18n'
 
 const route = useRoute()
 const { status: syncStatus } = useSyncSession()
-const { data, busy, error, notice, needsReload, retryRead } = useLedgerSession()
-onMounted(retryRead)
+const { data, busy, error, notice, needsReload, retryRead, updateCalendarMonth } = useLedgerSession()
+let dayTimer: number
+
+function refreshCalendar() {
+  const now = new Date()
+  updateCalendarMonth(currentMonth(now), route.name === 'ledger' && !route.query.entry)
+  const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
+  window.clearTimeout(dayTimer)
+  dayTimer = window.setTimeout(refreshCalendar, midnight.getTime() - now.getTime())
+}
+
+onMounted(() => {
+  refreshCalendar()
+  window.addEventListener('focus', refreshCalendar)
+  document.addEventListener('visibilitychange', refreshCalendar)
+  void retryRead()
+})
+
+onUnmounted(() => {
+  window.clearTimeout(dayTimer)
+  window.removeEventListener('focus', refreshCalendar)
+  document.removeEventListener('visibilitychange', refreshCalendar)
+})
 </script>
 
 <template>

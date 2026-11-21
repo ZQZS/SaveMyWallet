@@ -29,6 +29,7 @@ const amount = ref('')
 const totalPrice = ref('')
 const deposit = ref('0')
 const month = ref('')
+let confirmationMonthEdited = false
 const count = ref('3')
 const installmentIndex = ref('1')
 const errorKey = ref('')
@@ -41,7 +42,7 @@ const reviewInstallment = computed(() => props.review && isInstallment.value)
 const schedule = computed(() => readInstallmentSchedule(month.value, Number(count.value),
   reviewInstallment.value ? Number(installmentIndex.value) : 1))
 
-watch([() => props.entry?.id, () => props.month, () => props.initialDraft], () => {
+watch([() => props.entry?.id, () => props.entry ? undefined : props.month, () => props.initialDraft], () => {
   const entry = props.entry
   const draft = props.initialDraft
   kind.value = entry?.kind ?? (draft ? draft.kind ?? '' : 'single')
@@ -55,11 +56,16 @@ watch([() => props.entry?.id, () => props.month, () => props.initialDraft], () =
   totalPrice.value = total == null ? '' : String(total / 100)
   deposit.value = String((entry?.depositCents ?? draft?.depositCents ?? 0) / 100)
   month.value = entry?.month ?? (draft ? draft.month ?? '' : props.month)
+  confirmationMonthEdited = false
   count.value = draft ? String(draft.installmentCount ?? '') : '3'
   installmentIndex.value = draft?.installmentIndex === null ? '' : String(draft?.installmentIndex ?? 1)
   errorKey.value = ''
   creatingPlatform.value = false
 }, { immediate: true })
+
+watch(() => props.entry?.month, effectiveMonth => {
+  if (effectiveMonth && !confirmationMonthEdited) month.value = effectiveMonth
+})
 
 watch(() => props.platforms, platforms => {
   if (!platforms.some(platform => platform.id === platformId.value)) {
@@ -135,7 +141,8 @@ function submit() {
         </label>
         <label class="ledger-field">
           <span>{{ t(entry ? 'forms.monthConfirmed' : reviewInstallment ? 'forms.monthCurrent' : isInstallment ? 'forms.monthFirst' : kind === 'estimate' ? 'forms.monthEstimated' : 'forms.monthDue') }}</span>
-          <input v-model="month" name="month" type="month" :min="MIN_MONTH" :max="MAX_MONTH" required :disabled="busy" />
+          <input v-model="month" name="month" type="month" :min="MIN_MONTH" :max="MAX_MONTH" required :disabled="busy"
+            @input="confirmationMonthEdited = true" />
         </label>
         <label v-if="reviewInstallment" class="ledger-field"><span>{{ t('forms.currentPeriod') }}</span>
           <input v-model="installmentIndex" name="installmentIndex" type="number" inputmode="numeric" min="1" :max="count || 120" step="1" required :disabled="busy" />

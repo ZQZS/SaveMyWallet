@@ -49,9 +49,14 @@ function chooseEstimate(id: string) {
   conflict.value = initial.conflict
 }
 
+function originalEstimateMonth(entry: Entry) {
+  return entry.carriedFromMonth ?? entry.month
+}
+
 function current(entry: Entry) {
   const latest = candidates.value.find(candidate => candidate.entry.id === entry.id)?.entry
-  return !!latest && latest.platformId === entry.platformId && latest.title === entry.title && latest.month === entry.month
+  return !!latest && latest.platformId === entry.platformId && latest.title === entry.title
+    && originalEstimateMonth(latest) === originalEstimateMonth(entry)
     && latest.amountCents === entry.amountCents && (latest.depositCents ?? 0) === (entry.depositCents ?? 0)
 }
 
@@ -126,7 +131,7 @@ function confirm() {
           <select :value="selected?.id ?? ''" :disabled="locked" @change="chooseEstimate(($event.target as HTMLSelectElement).value)">
             <option value="">{{ t('notice.choose') }}</option>
             <option v-for="{ entry, matched } in candidates" :key="entry.id" :value="entry.id">
-              {{ matched ? t('notice.match') + ' · ' : '' }}{{ platformNames.get(entry.platformId) }} · {{ entry.title }} · {{ formatMonth(entry.month) }}
+              {{ matched ? t('notice.match') + ' · ' : '' }}{{ platformNames.get(entry.platformId) }} · {{ entry.title }} · {{ formatMonth(originalEstimateMonth(entry)) }}
               · {{ t('ledger.paidDeposit') }} {{ formatMoney(entry.depositCents ?? 0) }} · {{ t('ledger.balancePayment') }} {{ formatMoney(entry.amountCents) }}
             </option>
           </select>
@@ -141,7 +146,7 @@ function confirm() {
         <dl class="notice-values">
           <div><dt>{{ t('forms.platform') }}</dt><dd>{{ platformNames.get(selected.platformId) }}</dd></div>
           <div><dt>{{ t('forms.title') }}</dt><dd>{{ selected.title }}</dd></div>
-          <div><dt>{{ t('forms.monthEstimated') }}</dt><dd>{{ formatMonth(selected.month) }}</dd></div>
+          <div><dt>{{ t('forms.monthEstimated') }}</dt><dd>{{ formatMonth(originalEstimateMonth(selected)) }}</dd></div>
           <div><dt>{{ t('notice.oldDeposit') }}</dt><dd>{{ formatMoney(selected.depositCents ?? 0) }}</dd></div>
         </dl>
         <div v-if="draft.amountCents !== null || draft.totalCents !== null || draft.depositCents !== null" class="notice-evidence">

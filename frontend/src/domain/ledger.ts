@@ -15,6 +15,8 @@ export interface Entry {
   platformId: string
   title: string
   month: string
+  /** Stored estimate month when the display month has been carried forward. */
+  carriedFromMonth?: string
   /** For an estimate this is the balance after the paid deposit. */
   amountCents: number
   depositCents?: number
@@ -65,6 +67,17 @@ export function isMonth(value: string): boolean {
 
 export function currentMonth(date = new Date()): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+}
+
+export function projectBillingMonths(ledger: LedgerData, calendarMonth: string): LedgerData {
+  if (!isMonth(calendarMonth)) return ledger
+  let entries: Entry[] | undefined
+  for (const [index, entry] of ledger.entries.entries()) {
+    if (entry.kind !== 'estimate' || entry.status !== 'estimated' || entry.voided || entry.month >= calendarMonth) continue
+    entries ??= ledger.entries.slice()
+    entries[index] = { ...entry, month: calendarMonth, carriedFromMonth: entry.carriedFromMonth ?? entry.month }
+  }
+  return entries ? { ...ledger, entries } : ledger
 }
 
 export function shiftMonth(month: string, delta: number): string {

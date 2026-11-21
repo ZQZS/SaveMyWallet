@@ -1,6 +1,6 @@
 import { computed, inject, ref, shallowRef, type InjectionKey } from 'vue'
 import type { LedgerRepository } from '../data/repository'
-import { currentMonth, isMonth, summarizePlatforms, type LedgerData, type summarize } from '../domain/ledger.ts'
+import { currentMonth, isMonth, projectBillingMonths, summarizePlatforms, type LedgerData, type summarize } from '../domain/ledger.ts'
 import { displayError, t } from '../i18n/index.ts'
 
 interface LedgerServices {
@@ -15,9 +15,11 @@ interface PaymentChange {
 }
 
 export function createLedgerSession({ repository, calculateMonth }: LedgerServices) {
-  const data = shallowRef<LedgerData | null>(null)
+  const snapshot = shallowRef<LedgerData | null>(null)
+  const calendarMonth = ref(currentMonth())
+  const data = computed(() => snapshot.value && projectBillingMonths(snapshot.value, calendarMonth.value))
   const platformSummaries = computed(() => data.value ? summarizePlatforms(data.value) : null)
-  const month = ref(currentMonth())
+  const month = ref(calendarMonth.value)
   const busy = ref(false)
   const needsReload = ref(false)
   const writeCount = ref(0)
@@ -33,9 +35,16 @@ export function createLedgerSession({ repository, calculateMonth }: LedgerServic
     notice.value = ''
   }
 
+  function updateCalendarMonth(value: string, followCurrentMonth: boolean) {
+    if (value === calendarMonth.value || !isMonth(value)) return
+    const wasCurrent = month.value === calendarMonth.value
+    calendarMonth.value = value
+    if (followCurrentMonth && wasCurrent && !busy.value && !needsReload.value) selectMonth(value)
+  }
+
   async function readSnapshot() {
     try {
-      data.value = await repository.load()
+      snapshot.value = await repository.load()
       needsReload.value = false
       error.value = ''
     } catch (cause) {
@@ -74,7 +83,7 @@ export function createLedgerSession({ repository, calculateMonth }: LedgerServic
     await readSnapshot()
   }
 
-  return { repository, calculateMonth, data, platformSummaries, month, busy, needsReload, writeCount, error, notice, lastPayment, selectMonth, retryRead, commit }
+  return { repository, calculateMonth, data, platformSummaries, calendarMonth, month, busy, needsReload, writeCount, error, notice, lastPayment, selectMonth, updateCalendarMonth, retryRead, commit }
 }
 
 export type LedgerSession = ReturnType<typeof createLedgerSession>

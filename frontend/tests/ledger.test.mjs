@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { currentMonth, estimateTotalCents, installmentPeriods, isMonth, shiftMonth, summarize, summarizePlatforms, toCents } from '../src/domain/ledger.ts'
+import { currentMonth, estimateTotalCents, installmentPeriods, isMonth, projectBillingMonths, shiftMonth, summarize, summarizePlatforms, toCents } from '../src/domain/ledger.ts'
 
 const platform = { id: 'custom-id', name: '新增平台' }
 const current = '2026-12'
@@ -48,6 +48,45 @@ test('月度预测按动态平台合并，仅计目标月份，并把预估纳�
   const next = summarize(ledger, shiftMonth(current, 1))
   assert.equal(next.salary, 800000)
   assert.ok(next.balance < ledger.settings.warningFloorCents)
+})
+
+test('跨年只顺延过月且未作废的待确认预计补款，包含零尾款', () => {
+  const overdue = { ...entry('尾款', 8000, 'estimated', '2026-11'), depositCents: 2000 }
+  const prepaid = { ...entry('预付全款', 0, 'estimated'), depositCents: 1000 }
+  const fixed = [
+    entry('本月预估', 200, 'estimated', '2027-01'), entry('未来预估', 300, 'estimated', '2027-02'),
+    { ...entry('作废', 50, 'estimated'), voided: true },
+    { ...entry('已确认', 60, 'due'), kind: 'estimate' }, { ...entry('已还', 70, 'paid'), kind: 'estimate' },
+    entry('单次', 80, 'due'), { ...entry('分期', 90, 'due'), kind: 'installment' },
+  ]
+  const ledger = book([overdue, prepaid, ...fixed])
+  const january = projectBillingMonths(ledger, '2027-01')
+  assert.deepEqual(january.entries.slice(0, 2), [
+    { ...overdue, month: '2027-01', carriedFromMonth: '2026-11' },
+    { ...prepaid, month: '2027-01', carriedFromMonth: current },
+  ])
+  for (const [index, row] of fixed.entries()) assert.equal(january.entries[index + 2], row)
+  assert.equal(overdue.month, '2026-11')
+  assert.equal(overdue.carriedFromMonth, undefined)
+  assert.equal(projectBillingMonths(january, '2027-01'), january)
+  assert.equal(projectBillingMonths(ledger, '2026-11'), ledger)
+  assert.equal(projectBillingMonths(ledger, '2100-01'), ledger)
+  const february = projectBillingMonths(january, '2027-02')
+  assert.deepEqual(february, projectBillingMonths(ledger, '2027-02'))
+  assert.equal(summarize(february, '2026-11').estimated, 0)
+  assert.equal(summarize(february, '2027-01').estimated, 0)
+  assert.equal(summarize(february, '2027-02').estimated, 8500)
+  assert.deepEqual(summarizePlatforms(february), summarizePlatforms(ledger))
+})
+
+test('确认顺延尾款后按实际确认月计一次，后续自然月不再顺延', () => {
+  const original = { ...entry('预订', 8000, 'estimated'), depositCents: 2000 }
+  assert.equal(projectBillingMonths(book([original]), '2027-01').entries[0].month, '2027-01')
+  const confirmed = { ...original, month: '2027-02', amountCents: 7500, status: 'due' }
+  const saved = book([confirmed])
+  const march = projectBillingMonths(saved, '2027-03')
+  assert.equal(march, saved)
+  assert.deepEqual([current, '2027-01', '2027-02', '2027-03'].map(month => summarize(march, month).total), [0, 0, 7500, 0])
 })
 
 test('各平台按全部月份汇总实际分期、已还、待还和待确认笔数及金额', () => {
