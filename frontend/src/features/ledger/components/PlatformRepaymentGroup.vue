@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { ChevronDown } from 'lucide-vue-next'
-import type { Entry, PlatformGroup } from '../../../domain/ledger'
+import { estimateTotalCents, type Entry, type PlatformGroup } from '../../../domain/ledger'
 import { formatMoney, t } from '../../../i18n'
 
 const props = defineProps<{ group: PlatformGroup; expanded: boolean; busy: boolean }>()
@@ -17,11 +17,14 @@ const voidedCount = computed(() => props.group.entries.length - activeEntries.va
 const paidInFull = computed(() => props.group.paid > 0 && props.group.due === 0)
 const partiallyPaid = computed(() => props.group.paid > 0 && props.group.due > 0)
 const hasConfirmedBills = computed(() => props.group.due > 0 || props.group.paid > 0)
+const hasEstimates = computed(() => activeEntries.value.some(entry => entry.status === 'estimated'))
 const status = computed(() => {
   if (!activeEntries.value.length) return { label: t('ledger.allVoided'), tone: 'voided' }
-  if (!hasConfirmedBills.value) return { label: t('ledger.needsConfirmation'), tone: 'estimated' }
+  if (!hasConfirmedBills.value) return hasEstimates.value
+    ? { label: t('ledger.needsConfirmation'), tone: 'estimated' }
+    : { label: t('ledger.noBalancePayment'), tone: 'paid' }
   if (partiallyPaid.value) return { label: t('ledger.partiallyPaid'), tone: 'partial' }
-  if (paidInFull.value) return { label: t(props.group.estimated ? 'ledger.confirmedPaid' : 'ledger.paid'), tone: 'paid' }
+  if (paidInFull.value) return { label: t(hasEstimates.value ? 'ledger.confirmedPaid' : 'ledger.paid'), tone: 'paid' }
   return { label: t('ledger.unpaid'), tone: 'due' }
 })
 
@@ -35,7 +38,7 @@ const markTone = computed(() => {
 function changePayment() {
   if (props.busy || !hasConfirmedBills.value) return
   const paid = !paidInFull.value
-  const selected = activeEntries.value.filter(entry => entry.status === (paid ? 'due' : 'paid'))
+  const selected = activeEntries.value.filter(entry => entry.amountCents > 0 && entry.status === (paid ? 'due' : 'paid'))
   emit('pay', selected.map(entry => entry.id), paid)
 }
 
@@ -51,7 +54,7 @@ function entryDescription(entry: Entry) {
 <template>
   <li class="platform">
     <div class="platform-row">
-      <span v-if="!hasConfirmedBills" class="ineligible" :title="group.estimated ? t('ledger.confirmFirst') : undefined">—</span>
+      <span v-if="!hasConfirmedBills" class="ineligible" :title="hasEstimates ? t('ledger.confirmFirst') : undefined">—</span>
       <label v-else class="check-target">
         <input type="checkbox" :checked="paidInFull" :indeterminate="partiallyPaid"
           :disabled="busy" :aria-label="t(paidInFull ? 'ledger.undoPaymentFor' : 'ledger.payFor', { name: group.platform.name })"
@@ -76,11 +79,16 @@ function entryDescription(entry: Entry) {
     </div>
     <ul v-if="expanded" class="details" :id="'details-' + group.platform.id" :aria-label="t('ledger.detailsFor', { name: group.platform.name })">
       <li v-for="entry in group.entries" :key="entry.id" class="entry" :class="{ 'is-voided': entry.voided }">
-        <span class="entry-title"><strong>{{ entry.title }}</strong><small>{{ entryDescription(entry) }}</small></span>
-        <strong class="entry-amount">{{ formatMoney(entry.amountCents) }}</strong>
+        <span class="entry-title"><strong>{{ entry.title }}</strong><small>{{ entryDescription(entry) }}</small>
+          <small v-if="entry.kind === 'estimate'">{{ t('ledger.estimateBreakdown', {
+            total: formatMoney(estimateTotalCents(entry)), deposit: formatMoney(entry.depositCents ?? 0),
+          }) }}</small>
+        </span>
+        <strong class="entry-amount"><small v-if="entry.kind === 'estimate'">{{ t('ledger.balancePayment') }} </small>{{ formatMoney(entry.amountCents) }}</strong>
         <span v-if="entry.voided" class="entry-state">{{ t('ledger.voided') }}</span>
         <button v-else-if="entry.status === 'estimated'" class="entry-action confirm-action" type="button" :disabled="busy"
           :aria-label="t('ledger.confirmBill', { title: entry.title })" @click="emit('confirm', entry)">{{ t('ledger.confirmEstimate') }}</button>
+        <span v-else-if="entry.kind === 'estimate' && entry.amountCents === 0" class="entry-state is-paid">{{ t('ledger.noBalancePayment') }}</span>
         <span v-else class="entry-state" :class="{ 'is-paid': entry.status === 'paid' }">{{ t(entry.status === 'paid' ? 'ledger.paid' : 'ledger.unpaid') }}</span>
         <button class="entry-action void-action" type="button" :disabled="busy"
           :aria-haspopup="entry.kind === 'installment' ? 'dialog' : undefined"
@@ -145,6 +153,7 @@ function entryDescription(entry: Entry) {
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
+.entry-amount small { display: block; color: var(--sub); font-size: .75rem; font-weight: 400; }
 .status-cell { display: flex; align-items: center; justify-content: end; gap: 8px; }
 .state { padding: 3px 8px; border-radius: 6px; white-space: nowrap; font-size: 0.78rem; font-weight: 600; }
 .state.due, .state.voided { color: var(--sub); background: var(--soft); }

@@ -21,7 +21,7 @@ const session = createLedgerSession({ repository, calculateMonth: summarize })
 | 读账本 | `GET /ledger` | `LedgerData` |
 | 新增平台 | `POST /platforms`，提交 `{ name }` | `{ id }` |
 | 新增账单 | `POST /bills`，提交 `BillInput` | 2xx |
-| 确认补款 | `POST /bills/{id}/confirm`，提交 `{ title, month, amountCents }` | 2xx |
+| 确认补款 | `POST /bills/{id}/confirm`，提交 `{ title, month, totalCents, depositCents, amountCents }`。金额以分为单位，`amountCents` 等于总价减定金。 | 2xx |
 | 作废或恢复单条明细 | `PUT /bills/{id}/voided`，提交 `{ voided: true }` 或 `{ voided: false }` | 204 |
 | 作废或恢复整笔分期 | `PUT /bills/{id}/installment/voided`，以任一期的明细 ID 提交 `{ voided: true }` 或 `{ voided: false }` | `{ changedIds }`，按期次返回实际变更的 ID |
 | 勾选或取消还款 | `PATCH /payments`，提交 `{ ids, paid }` | `{ changedIds }`，仅含此次实际变更的明细 |

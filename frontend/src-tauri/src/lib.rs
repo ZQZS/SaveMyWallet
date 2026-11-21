@@ -1,3 +1,4 @@
+mod ai;
 mod backup_files;
 mod ledger;
 mod sync_client;
@@ -116,6 +117,9 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(ai::credentials::init())
+        .manage(ai::AiRequests::default())
+        .manage(ai::images::SelectedImage::default())
         .setup(|app| {
             app.manage(sync_client::SyncClient::default());
             app.manage(Database {
@@ -125,6 +129,16 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            ai::credentials::ai_key_status,
+            ai::credentials::ai_save_key,
+            ai::credentials::ai_remove_key,
+            ai::ai_test_key,
+            ai::ai_explain,
+            ai::ai_parse_scenario,
+            ai::ai_recognize,
+            ai::ai_cancel,
+            ai::images::ai_choose_image,
+            ai::images::ai_release_image,
             backup_files::choose_backup_file,
             backup_files::save_backup_file,
             load_ledger,

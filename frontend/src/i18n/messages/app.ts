@@ -28,6 +28,7 @@ export const appMessages = {
     'error.NATIVE_ONLY': '请通过 SaveMyWallet 客户端打开本地账本。',
     'error.ENTRY_NOT_FOUND': '未找到这笔明细，请刷新账本。',
     'error.STALE_ESTIMATE': '这笔补款已确认、已作废或已不存在，请刷新账本。',
+    'error.ESTIMATE_AMOUNTS_INVALID': '请核对总价和已支付定金。应补金额须等于总价减去定金，且不能为负数。',
   },
   'en-US': {
     'nav.ledger': 'Monthly ledger',
@@ -58,5 +59,6 @@ export const appMessages = {
     'error.NATIVE_ONLY': 'Open the local ledger in the SaveMyWallet app.',
     'error.ENTRY_NOT_FOUND': 'This entry could not be found. Reload the ledger.',
     'error.STALE_ESTIMATE': 'This estimated payment has been confirmed, voided, or removed. Reload the ledger.',
+    'error.ESTIMATE_AMOUNTS_INVALID': 'Check the total price and paid deposit. The balance must equal the total minus the deposit and cannot be negative.',
   },
 } as const

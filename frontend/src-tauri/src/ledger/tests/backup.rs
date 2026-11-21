@@ -35,6 +35,8 @@ fn sample_ledger() -> Connection {
             title: "已确认尾款".to_owned(),
             month: "2027-01".to_owned(),
             amount_cents: 7700,
+            deposit_cents: None,
+            total_cents: None,
         },
     )
     .unwrap();
@@ -53,6 +55,39 @@ fn sample_ledger() -> Connection {
 
 fn snapshot_json(db: &mut Connection) -> Value {
     serde_json::to_value(snapshot(db).unwrap()).unwrap()
+}
+
+#[test]
+fn v4_preserves_estimate_deposits_and_refuses_invalid_totals_or_downgrades() {
+    let mut source = database();
+    let platform = add_platform(&source, "预售").unwrap();
+    let mut input = bill(&platform, "全额定金", "2027-01", 0, "estimate");
+    input.total_cents = Some(32000);
+    input.deposit_cents = Some(32000);
+    add_bill(&mut source, input).unwrap();
+    let saved = export(&mut source).unwrap();
+    let backup: Value = serde_json::from_str(&saved).unwrap();
+    assert_eq!(backup["version"], 4);
+    let entry = &backup["ledger"]["entries"][0];
+    assert_eq!(entry["depositCents"], 32000);
+    assert_eq!(entry["amountCents"], 0);
+    let mut target = sample_ledger();
+    restore(&mut target, &saved).unwrap();
+    let original = snapshot_json(&mut target);
+    assert_eq!(original, snapshot_json(&mut source));
+    for (pointer, value) in [
+        ("/version", json!(3)),
+        ("/ledger/entries/0/depositCents", Value::Null),
+        ("/ledger/entries/0/depositCents", json!(-1)),
+        ("/ledger/entries/0/depositCents", json!(0)),
+        ("/ledger/entries/0/amountCents", json!(99_999_999_900_i64)),
+        ("/ledger/entries/0/status", json!("due")),
+    ] {
+        let mut invalid = backup.clone();
+        *invalid.pointer_mut(pointer).unwrap() = value;
+        assert!(restore(&mut target, &invalid.to_string()).is_err());
+        assert_eq!(snapshot_json(&mut target), original);
+    }
 }
 
 #[test]
@@ -153,7 +188,7 @@ fn invalid_backups_are_rejected_by_preview_and_restore_without_changes() {
     let mut fixtures = vec![("{".to_owned(), "BACKUP_FORMAT")];
     for (pointer, value, error) in [
         ("/format", json!("OtherApp"), "BACKUP_FORMAT"),
-        ("/version", json!(4), "BACKUP_VERSION"),
+        ("/version", json!(5), "BACKUP_VERSION"),
         ("/version", json!(2), "BACKUP_INVALID"),
         (
             "/ledger/entries/0/installmentId",

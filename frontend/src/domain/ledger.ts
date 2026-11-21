@@ -15,7 +15,9 @@ export interface Entry {
   platformId: string
   title: string
   month: string
+  /** For an estimate this is the balance after the paid deposit. */
   amountCents: number
+  depositCents?: number
   status: PaymentStatus
   voided?: boolean
   kind: BillKind
@@ -38,6 +40,8 @@ export interface BillInput {
   amountCents: number
   kind: BillKind
   installmentCount: number
+  totalCents?: number
+  depositCents?: number
 }
 
 export interface BudgetInput {
@@ -47,7 +51,11 @@ export interface BudgetInput {
   overrideSalaryCents: number | null
 }
 
-export type EstimateInput = Pick<Entry, 'id' | 'title' | 'month' | 'amountCents'>
+export type EstimateInput = Pick<Entry, 'id' | 'title' | 'month' | 'amountCents'> & Pick<BillInput, 'totalCents' | 'depositCents'>
+
+export function estimateTotalCents(entry: Pick<Entry, 'amountCents' | 'depositCents'>): number {
+  return entry.amountCents + (entry.depositCents ?? 0)
+}
 
 export function isMonth(value: string): boolean {
   return /^\d{4}-(0[1-9]|1[0-2])$/.test(value) && value >= MIN_MONTH && value <= MAX_MONTH

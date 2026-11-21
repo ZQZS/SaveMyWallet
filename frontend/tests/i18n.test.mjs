@@ -5,6 +5,9 @@ import { appMessages } from '../src/i18n/messages/app.ts'
 import { formsMessages } from '../src/i18n/messages/forms.ts'
 import { ledgerMessages } from '../src/i18n/messages/ledger.ts'
 import { settingsMessages } from '../src/i18n/messages/settings.ts'
+import { aiErrorMessages } from '../src/i18n/messages/aiErrors.ts'
+import { aiMonthMessages } from '../src/i18n/messages/aiMonth.ts'
+import { billImageMessages } from '../src/i18n/messages/billImage.ts'
 
 function parameters(text) {
   return [...new Set([...text.matchAll(/\{(\w+)\}/g)].map(match => match[1]))].sort()
@@ -12,7 +15,7 @@ function parameters(text) {
 
 test('两个语言目录对每个界面消息使用相同的键和参数', () => {
   const allKeys = new Set()
-  for (const group of [appMessages, formsMessages, ledgerMessages, settingsMessages]) {
+  for (const group of [appMessages, formsMessages, ledgerMessages, settingsMessages, aiErrorMessages, aiMonthMessages, billImageMessages]) {
     assert.deepEqual(Object.keys(group['en-US']).sort(), Object.keys(group['zh-CN']).sort())
     for (const [key, chinese] of Object.entries(group['zh-CN'])) {
       assert.ok(!allKeys.has(key), 'Duplicate translation key: ' + key)

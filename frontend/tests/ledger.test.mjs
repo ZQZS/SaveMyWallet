@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { currentMonth, installmentPeriods, isMonth, shiftMonth, summarize, toCents } from '../src/domain/ledger.ts'
+import { currentMonth, estimateTotalCents, installmentPeriods, isMonth, shiftMonth, summarize, toCents } from '../src/domain/ledger.ts'
 
 const platform = { id: 'custom-id', name: '新增平台' }
 const current = '2026-12'
@@ -20,6 +20,22 @@ function book(entries) {
     salaryOverrides: { [current]: 600_000 },
   }
 }
+
+test('总价 100 元已付 20 元定金，月度预算与还款状态只计入 80 元尾款', () => {
+  const estimate = { ...entry('预订', 8000, 'estimated'), depositCents: 2000 }
+  const prepaid = { ...entry('已付全款', 0, 'paid'), kind: 'estimate', depositCents: 10000 }
+  const ledger = book([estimate, prepaid])
+  assert.equal(estimateTotalCents(estimate), 10000)
+  assert.equal(estimateTotalCents(prepaid), 10000)
+  assert.equal(estimateTotalCents(entry('旧款项', 8000, 'estimated')), 8000)
+  for (const status of ['estimated', 'due', 'paid']) {
+    estimate.status = status
+    const summary = summarize(ledger, current)
+    assert.deepEqual([summary.total, summary.balance, summary[status]], [8000, 592000, 8000])
+  }
+  estimate.voided = true
+  assert.equal(summarize(ledger, current).total, 0)
+})
 
 test('月度预测按动态平台合并，仅计目标月份，并把预估纳入结余', () => {
   const ledger = book([

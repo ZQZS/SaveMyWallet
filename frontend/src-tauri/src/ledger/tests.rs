@@ -14,9 +14,164 @@ fn bill(platform: &str, title: &str, month: &str, amount_cents: i64, kind: &str)
         title: title.to_owned(),
         month: month.to_owned(),
         amount_cents,
+        total_cents: None,
+        deposit_cents: None,
         kind: kind.to_owned(),
         installment_count: 1,
     }
+}
+
+#[test]
+fn estimate_deposits_survive_confirmation_and_full_deposits_are_already_settled() {
+    let mut db = database();
+    let platform = add_platform(&db, "预售").unwrap();
+    let mut input = bill(&platform, "预购", "2026-12", 8000, "estimate");
+    input.deposit_cents = Some(2000);
+    input.total_cents = Some(10000);
+    add_bill(&mut db, input).unwrap();
+    let original = snapshot(&mut db).unwrap().entries.remove(0);
+    assert_eq!(
+        (original.amount_cents, original.deposit_cents),
+        (8000, 2000)
+    );
+    // An older caller can still confirm the net amount and preserve the recorded deposit.
+    let legacy: ConfirmInput = serde_json::from_value(serde_json::json!({
+        "id":original.id, "month":"2027-01", "title":"到货", "amountCents":7000
+    }))
+    .unwrap();
+    confirm(&db, legacy).unwrap();
+    let actual = snapshot(&mut db).unwrap().entries.remove(0);
+    assert_eq!(
+        (
+            actual.id,
+            actual.status.as_str(),
+            actual.amount_cents,
+            actual.deposit_cents
+        ),
+        (original.id, "due", 7000, 2000)
+    );
+
+    let mut prepaid = bill(&platform, "全款预订", "2027-02", 0, "estimate");
+    prepaid.deposit_cents = Some(10000);
+    prepaid.total_cents = Some(10000);
+    add_bill(&mut db, prepaid).unwrap();
+    let prepaid = snapshot(&mut db).unwrap().entries.pop().unwrap();
+    assert_eq!(prepaid.status, "estimated");
+    confirm(
+        &db,
+        ConfirmInput {
+            id: prepaid.id.clone(),
+            title: prepaid.title,
+            month: prepaid.month,
+            amount_cents: 0,
+            deposit_cents: Some(11000),
+            total_cents: Some(11000),
+        },
+    )
+    .unwrap();
+    let ids = std::slice::from_ref(&prepaid.id);
+    assert!(mark_payment(&mut db, ids, false).unwrap().is_empty());
+    assert!(undo_payment(&mut db, ids, false).unwrap().is_empty());
+    let settled = snapshot(&mut db).unwrap().entries.pop().unwrap();
+    assert_eq!(
+        (
+            settled.id,
+            settled.status.as_str(),
+            settled.amount_cents,
+            settled.deposit_cents
+        ),
+        (prepaid.id, "paid", 0, 11000)
+    );
+}
+
+#[test]
+fn invalid_estimate_amounts_are_rejected_without_writing() {
+    let mut db = database();
+    let platform = add_platform(&db, "预售").unwrap();
+    for (net, deposit, total, kind) in [
+        (0, 0, 0, "estimate"),
+        (-1, 5, 4, "estimate"),
+        (100, -1, 99, "estimate"),
+        (50, 11, 60, "estimate"),
+        (MAX_CENTS, 1, MAX_CENTS + 1, "estimate"),
+        (1, i64::MAX, i64::MAX, "estimate"),
+        (100, 1, 101, "single"),
+        (0, 100, 100, "installment"),
+    ] {
+        let mut input = bill(&platform, "不应保存", "2026-12", net, kind);
+        input.deposit_cents = Some(deposit);
+        input.total_cents = Some(total);
+        assert!(add_bill(&mut db, input).is_err());
+    }
+    assert!(snapshot(&mut db).unwrap().entries.is_empty());
+    let mut input = bill(&platform, "已付定金", "2026-12", 90, "estimate");
+    input.deposit_cents = Some(10);
+    add_bill(&mut db, input).unwrap();
+    let original = snapshot(&mut db).unwrap().entries.remove(0);
+    assert!(confirm(
+        &db,
+        ConfirmInput {
+            id: original.id.clone(),
+            title: "不应保存".into(),
+            month: "2027-01".into(),
+            amount_cents: 70,
+            deposit_cents: Some(30),
+            total_cents: Some(150),
+        }
+    )
+    .is_err());
+    let saved = snapshot(&mut db).unwrap().entries.remove(0);
+    assert_eq!(
+        serde_json::to_value(saved).unwrap(),
+        serde_json::to_value(original).unwrap()
+    );
+}
+
+#[test]
+fn v5_estimates_preserve_row_order_status_and_wire_value_after_migration() {
+    let mut db = Connection::open_in_memory().unwrap();
+    db.execute_batch(include_str!("../schema_v1.sql")).unwrap();
+    db.execute_batch(include_str!("../initial_data.sql"))
+        .unwrap();
+    db.execute_batch(include_str!("../schema_v2.sql")).unwrap();
+    db.execute_batch(
+        "ALTER TABLE sync_queue ADD COLUMN undo_of TEXT;
+                      ALTER TABLE sync_queue ADD COLUMN wire_json TEXT;",
+    )
+    .unwrap();
+    db.execute_batch(include_str!("../schema_v3.sql")).unwrap();
+    db.execute_batch(include_str!("../schema_v4.sql")).unwrap();
+    db.execute_batch(include_str!("../schema_v5.sql")).unwrap();
+    db.execute_batch("INSERT INTO entries (rowid,id,platform_id,title,month,amount_cents,kind,status,voided)
+        SELECT 28,'legacy',id,'旧补款','2027-01',5000,'estimate','estimated',1 FROM platforms LIMIT 1;").unwrap();
+    let wire = |db: &Connection| -> String {
+        db.query_row(
+            "SELECT value_json FROM sync_local WHERE id='legacy' AND kind='entry'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+    let before = wire(&db);
+    migrate(&mut db).unwrap();
+    migrate(&mut db).unwrap();
+    assert_eq!(wire(&db), before);
+    let rowid: i64 = db
+        .query_row("SELECT rowid FROM entries WHERE id='legacy'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(rowid, 28);
+    let entry = snapshot(&mut db).unwrap().entries.remove(0);
+    assert!(entry.voided);
+    assert_eq!(
+        (
+            entry.status.as_str(),
+            entry.amount_cents,
+            entry.deposit_cents
+        ),
+        ("estimated", 5000, 0)
+    );
 }
 
 #[test]
@@ -177,6 +332,8 @@ fn estimate_can_be_confirmed_only_after_restoration() {
         title: "尾款".into(),
         month: "2027-01".into(),
         amount_cents: 800,
+        total_cents: None,
+        deposit_cents: None,
     };
     set_entry_voided(&mut db, &id, true).unwrap();
     assert_eq!(
@@ -424,6 +581,8 @@ fn paying_a_platform_skips_estimates_and_undo_only_reverts_changed_items() {
         title: "已核实尾款".to_string(),
         month: "2027-01".to_string(),
         amount_cents: 5500,
+        total_cents: None,
+        deposit_cents: None,
     };
     confirm(&db, confirm_input()).unwrap();
     assert!(confirm(&db, confirm_input()).is_err());

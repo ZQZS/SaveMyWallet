@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useLedgerSession } from '../../app/ledgerSession'
-import { isMonth } from '../../domain/ledger'
+import { estimateTotalCents, isMonth } from '../../domain/ledger'
 import { formatMoney, formatMonth, t } from '../../i18n'
 import type { SyncConflict } from './sync/syncTypes'
 
@@ -25,10 +25,17 @@ function details(kind: string, value: unknown): Detail[] {
       const month = String(record.month)
       const platformId = String(record.platformId)
       const type = String(record.kind)
+      const amountCents = Number(record.amountCents)
+      const depositCents = Number(record.depositCents ?? 0)
+      const amounts = type === 'estimate' ? [
+        { label: 'ledger.estimateTotal', text: formatMoney(estimateTotalCents({ amountCents, depositCents })) },
+        { label: 'ledger.paidDeposit', text: formatMoney(depositCents) },
+        { label: 'ledger.balancePayment', text: formatMoney(amountCents) },
+      ] : [{ label: 'syncConflict.amount', text: formatMoney(amountCents) }]
       return [
         { label: 'forms.title', text: String(record.title) },
         { label: 'forms.monthDue', text: isMonth(month) ? formatMonth(month) : month },
-        { label: 'syncConflict.amount', text: formatMoney(Number(record.amountCents)) },
+        ...amounts,
         { label: 'syncConflict.entryState', text: t(record.voided ? 'ledger.voided' : 'syncConflict.active') },
         { label: 'syncConflict.paymentStatus', text: t(statuses[String(record.status)] ?? String(record.status)) },
         { label: 'forms.platform', text: platformNames.value.get(platformId) ?? platformId },

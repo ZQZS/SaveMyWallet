@@ -2,7 +2,7 @@
 
 SaveMyWallet 面向在多个平台分期消费、预订商品或有临时还款的人。用户按还款月份查看各平台应付金额，核对已经还过的款项，并在发薪前估算扣掉下月还款能剩多少钱。这里的「预计结余」只考虑已录入的工资与还款计划。
 
-Windows 和安卓共用 Vue、TypeScript、Tauri 2 和 Rust 代码，每台设备使用各自的 SQLite 账本。本地录入、动态平台、月度汇总、还款勾选、工资覆盖和结余预警都可离线使用。系统设置提供语言切换、手动备份恢复、账本重置和跨设备同步。桌宠和 AI 的实际功能列在后续路线中。[路线图](roadmap.md) · [AI 协作者指南](../AGENTS.md) · [同步协议](../../backend/docs/sync.md)
+Windows 和安卓共用 Vue、TypeScript、Tauri 2 和 Rust 代码，每台设备使用各自的 SQLite 账本。本地录入、动态平台、月度汇总、还款勾选、工资覆盖和结余预警都可离线使用。系统设置提供语言切换、手动备份恢复、账本重置、跨设备同步和 DeepSeek 密钥管理。月度解释、截图草稿和分期试算见助手说明，桌宠仍在规划中。[AI 助手](ai-features.md) · [路线图](roadmap.md) · [AI 协作者指南](../AGENTS.md) · [同步协议](../../backend/docs/sync.md)
 
 ## 一笔账如何影响月度清单
 
@@ -10,7 +10,7 @@ Windows 和安卓共用 Vue、TypeScript、Tauri 2 和 Rust 代码，每台设�
 | --- | --- |
 | 金额与月份 | 输入使用元，领域模型和 SQLite 用整数分。月份按还款归属月保存为 `YYYY-MM`，支持 1900-01 至 2099-12。 |
 | 单次与分期 | 单次还款记在指定月。分期输入每期金额、首期月份和期数，原生端在一个事务中生成连续 1–120 个月的明细，跨年照常递推。 |
-| 预计补款 | `estimated` 计入预计支出。用户核对金额和月份后，原明细按 ID 更新为 `due`。若月份发生变化，支出随之移到新月份。 |
+| 预计补款 | 应补金额 = 总价 − 已支付定金。明细的 `amountCents` 保存应补，`depositCents` 缺省为 0，仅应补金额参与月度汇总。确认会更新同一 ID 的金额和月份。应补大于 0 时进入 `due`，全额预付时进入 `paid`。 |
 | 平台与还款 | 从数据库读取平台，按平台 ID 和月份归组。勾选把当月所选的 `due` 明细改为 `paid`。撤销使用本次实际变更的 ID。后来补录的 `due` 与已有 `paid` 同时存在时显示「部分已还」。 |
 | 工资与预警 | 单月工资优先，空值使用默认工资，0 表示当月无工资。整月应还等于已还、确认待还、待确认三项之和。预计结余等于适用工资减整月应还。严格低于警告线时显示差额。下月预览用下月工资和明细。 |
 
@@ -40,7 +40,7 @@ Windows 和安卓共用 Vue、TypeScript、Tauri 2 和 Rust 代码，每台设�
 | `src-tauri/src/` | `lib.rs` 注册命令并管理连接。`ledger.rs` 验证、查询、写事务。`schema_v1.sql` 定义首版表结构。 |
 | `src-tauri/gen/android/`、`src-tauri/capabilities/`、`src-tauri/icons/` | 安卓 Gradle 工程、Tauri 权限与打包图标。两端共用的账务逻辑位于 `src/` 和 Rust 模块。 |
 | `src/features/pets/`、`resources/pets/` | 桌宠契约及资源包，后续供展示层加载。开发样例、资源规范和跨平台呈现见[桌宠开发说明](pets.md)。 |
-| `src/integrations/ai/`、`src-tauri/src/ai/`、`resources/ai/` | 分别预留 AI 能力契约、原生凭据与服务接入、提示词和联调素材。数据流与识图审核见[AI 功能说明](ai-features.md)。 |
+| `src/integrations/ai/`、`src-tauri/src/ai/`、`resources/ai/` | 分别提供前端调用与字段校验、设备凭据与 DeepSeek 请求、提示词与合成验收样本。[数据流与截图审核](ai-features.md) |
 | `tests/`、`src-tauri/src/ledger/tests.rs` | 前端业务、会话和扩展契约回归。原生 SQLite 写入、重开和事务回归。 |
 | `docs/`、`dist/`、`src-tauri/target/`、`release/` | 项目文档、Vite 构建结果、Cargo 构建结果和供安装的交付物。修改功能时编辑源目录，再生成对应产物。 |
 
@@ -54,7 +54,9 @@ Windows 和安卓共用 Vue、TypeScript、Tauri 2 和 Rust 代码，每台设�
 
 **改系统设置或备份。** 从 [settingsRoutes.ts](../src/features/settings/settingsRoutes.ts) 找到对应子页，同时维护中英文词条。设备语言保存在本机 WebView 的 `savemywallet.locale` 偏好中。界面格式化使用 `formatMoney` 和 `formatMonth`，货币始终为人民币，平台名和款项名称按原文显示。
 
-JSON 备份的顶层包含 `format: "SaveMyWallet"`、`version` 和 `ledger`。包含分期组标识 `installmentId` 时导出 v3。其余账本按是否有作废明细导出 v2 或 v1。新版客户端可以还原这三种格式。账本快照内含平台、明细、预算与单月覆盖，以及原有 ID 和还款状态。文件为可读明文，大小上限 32 MiB，导出仅写入系统选择器指定的位置。预览与导入复用 Rust 校验器，校验格式版本、月份、金额、关联 ID 与分期信息；全量替换在 SQLite 事务内完成。重置同样使用事务，并在原生层再次逐字比较 `重置`。测试两种操作时使用隔离账本；验证失败回滚、取消、重开后的数据与写后读取重试。[备份实现](../src-tauri/src/ledger/backup.rs) · [文件读写](../src-tauri/src/backup_files.rs)
+JSON 备份的顶层包含 `format: "SaveMyWallet"`、`version` 和 `ledger`。有非零定金时导出 v4，其余账本按分期标识、作废明细或基础字段分别使用 v3、v2 或 v1。新版客户端可还原 v1–v4。SQLite v6 为已有明细补上默认定金 0，保留原有应补金额、ID 和同步状态。[SQLite v6 迁移](../src-tauri/src/schema_v6.sql)
+
+账本快照内含平台、明细、预算与单月覆盖，以及原有 ID 和还款状态。文件为可读明文，大小上限 32 MiB，导出仅写入系统选择器指定的位置。预览与导入复用 Rust 校验器，全量替换在 SQLite 事务内完成。重置同样使用事务，并在原生层再次逐字比较 `重置`。测试这两种操作时使用隔离账本，核对校验失败回滚、取消、重开后的数据与写后读取重试。[备份实现](../src-tauri/src/ledger/backup.rs) · [文件读写](../src-tauri/src/backup_files.rs)
 
 - **加菜单或子页面**。在所属 `features/` 目录建立页面，在 `router.ts` 关联归属菜单。只有新增顶层菜单才改 `menu.ts`。分别从桌面顶部、安卓底部和直接打开 hash 路由验证。
 - **改账务口径或字段**。先用领域模型和回归样例表达新口径。若需要持久化新字段，同步仓库接口、IPC 数据类型和 Rust 校验，并新增数据库迁移。客户端通过 `PRAGMA user_version` 识别版本。[SQLite v5](../src-tauri/src/schema_v5.sql) 给新建分期的所有期次保存同一组标识，并保留每一期的明细 ID。旧分期保留原有同步记录，整笔操作时按平台、名称、每期金额、总期数和首月核对，每一期都须唯一。新增迁移时，用带有待传分期和未解决冲突的旧账本重开，核对绑定、游标、明细 ID 与重试结果。[同步与升级规则](../../backend/docs/sync.md)

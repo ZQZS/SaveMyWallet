@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, error::Error, time::Duration};
 
 pub type StorageResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
-const MAX_CENTS: i64 = 99_999_999_900;
+pub(crate) const MAX_CENTS: i64 = 99_999_999_900;
 const LAST_MONTH: u32 = 2099 * 12 + 11;
 
 pub mod backup;
@@ -26,6 +26,12 @@ pub struct Entry {
     title: String,
     month: String,
     amount_cents: i64,
+    #[serde(
+        default,
+        skip_serializing_if = "is_zero",
+        deserialize_with = "deserialize_deposit"
+    )]
+    deposit_cents: i64,
     status: String,
     kind: String,
     installment_index: Option<u32>,
@@ -38,6 +44,20 @@ pub struct Entry {
     installment_id: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     voided: bool,
+}
+
+fn is_zero(cents: &i64) -> bool {
+    *cents == 0
+}
+
+// Entry records omit a zero deposit to keep the original backup and sync representation.
+fn deserialize_deposit<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
+    let deposit = i64::deserialize(deserializer)?;
+    if (1..=MAX_CENTS).contains(&deposit) {
+        Ok(deposit)
+    } else {
+        Err(serde::de::Error::custom("invalid recorded deposit"))
+    }
 }
 
 fn deserialize_installment_id<'de, D: serde::Deserializer<'de>>(
@@ -82,6 +102,8 @@ pub struct BillInput {
     title: String,
     month: String,
     amount_cents: i64,
+    total_cents: Option<i64>,
+    deposit_cents: Option<i64>,
     kind: String,
     installment_count: u32,
 }
@@ -93,6 +115,8 @@ pub struct ConfirmInput {
     title: String,
     month: String,
     amount_cents: i64,
+    total_cents: Option<i64>,
+    deposit_cents: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -114,7 +138,7 @@ pub fn migrate(conn: &mut Connection) -> StorageResult<()> {
             tx.execute_batch(include_str!("schema_v1.sql"))?;
             tx.execute_batch(include_str!("initial_data.sql"))?;
         }
-        1..=5 => (),
+        1..=6 => (),
         _ => return Err("账本版本较新，请升级应用后重试。".into()),
     }
     if version < 2 {
@@ -149,6 +173,9 @@ pub fn migrate(conn: &mut Connection) -> StorageResult<()> {
     if version < 5 {
         tx.execute_batch(include_str!("schema_v5.sql"))?;
     }
+    if version < 6 {
+        tx.execute_batch(include_str!("schema_v6.sql"))?;
+    }
     tx.commit()?;
     Ok(())
 }
@@ -174,7 +201,8 @@ fn read_ledger(tx: &Connection) -> StorageResult<Ledger> {
     let entries = {
         let mut query = tx.prepare(
             "SELECT id, platform_id, title, month, amount_cents, status, kind,
-                    installment_index, installment_count, voided, installment_id FROM entries ORDER BY month, rowid",
+                    installment_index, installment_count, voided, installment_id, deposit_cents
+             FROM entries ORDER BY month, rowid",
         )?;
         let rows = query.query_map([], |r| {
             Ok(Entry {
@@ -189,6 +217,7 @@ fn read_ledger(tx: &Connection) -> StorageResult<Ledger> {
                 installment_count: r.get(8)?,
                 voided: r.get(9)?,
                 installment_id: r.get(10)?,
+                deposit_cents: r.get(11)?,
             })
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()?
@@ -216,7 +245,7 @@ fn read_ledger(tx: &Connection) -> StorageResult<Ledger> {
     })
 }
 
-fn month_index(month: &str) -> StorageResult<u32> {
+pub(crate) fn month_index(month: &str) -> StorageResult<u32> {
     let invalid = "请选择 1900 年至 2099 年间有效的还款月份。";
     let (year, number) = month.split_once('-').ok_or(invalid)?;
     if year.len() != 4
@@ -239,6 +268,29 @@ fn month_index(month: &str) -> StorageResult<u32> {
 fn check_amount(cents: i64, minimum: i64) -> StorageResult<()> {
     if !(minimum..=MAX_CENTS).contains(&cents) {
         return Err("金额超出允许范围，请检查后重试。".into());
+    }
+    Ok(())
+}
+
+fn check_entry_amount(kind: &str, amount_cents: i64, deposit_cents: i64) -> StorageResult<()> {
+    if kind != "estimate" && deposit_cents != 0 {
+        return Err("ESTIMATE_AMOUNTS_INVALID".into());
+    }
+    check_amount(amount_cents, 0)?;
+    check_amount(deposit_cents, 0)?;
+    check_amount(amount_cents + deposit_cents, 1)
+}
+
+fn check_bill_amount(
+    kind: &str,
+    amount_cents: i64,
+    deposit_cents: i64,
+    total_cents: Option<i64>,
+) -> StorageResult<()> {
+    check_entry_amount(kind, amount_cents, deposit_cents)?;
+    if total_cents.is_some_and(|total| kind != "estimate" || total != amount_cents + deposit_cents)
+    {
+        return Err("ESTIMATE_AMOUNTS_INVALID".into());
     }
     Ok(())
 }
@@ -281,7 +333,11 @@ pub fn add_platform(conn: &Connection, name: &str) -> StorageResult<String> {
 pub fn add_bill(conn: &mut Connection, input: BillInput) -> StorageResult<()> {
     let title = bill_title(&input.title)?;
     let start = month_index(&input.month)?;
-    check_amount(input.amount_cents, 1)?;
+    let deposit = input.deposit_cents.unwrap_or(0);
+    if input.kind != "estimate" && input.deposit_cents.is_some() {
+        return Err("ESTIMATE_AMOUNTS_INVALID".into());
+    }
+    check_bill_amount(&input.kind, input.amount_cents, deposit, input.total_cents)?;
     let (periods, status) = match input.kind.as_str() {
         "single" => (1, "due"),
         "estimate" => (1, "estimated"),
@@ -313,8 +369,8 @@ pub fn add_bill(conn: &mut Connection, input: BillInput) -> StorageResult<()> {
     {
         let mut insert = tx.prepare(
             "INSERT INTO entries (platform_id, title, month, amount_cents, status, kind,
-             installment_index, installment_count, installment_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) RETURNING id",
+             installment_index, installment_count, installment_id, deposit_cents)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) RETURNING id",
         )?;
         for offset in 0..periods {
             let index = start + offset;
@@ -329,7 +385,8 @@ pub fn add_bill(conn: &mut Connection, input: BillInput) -> StorageResult<()> {
                     input.kind,
                     split.then_some(offset + 1),
                     split.then_some(periods),
-                    installment_id
+                    installment_id,
+                    deposit
                 ],
                 |r| r.get(0),
             )?);
@@ -343,16 +400,23 @@ pub fn add_bill(conn: &mut Connection, input: BillInput) -> StorageResult<()> {
 pub fn confirm(conn: &Connection, input: ConfirmInput) -> StorageResult<()> {
     let title = bill_title(&input.title)?;
     month_index(&input.month)?;
-    check_amount(input.amount_cents, 1)?;
-    let tx = conn.unchecked_transaction()?;
-    let changed = tx.execute(
-        "UPDATE entries SET title = ?1, month = ?2, amount_cents = ?3, status = 'due'
-         WHERE id = ?4 AND status = 'estimated' AND voided = 0",
-        params![title, input.month, input.amount_cents, input.id],
+    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+    let saved_deposit: i64 = tx.query_row(
+        "SELECT deposit_cents FROM entries WHERE id = ? AND status = 'estimated' AND voided = 0",
+        [&input.id], |row| row.get(0),
+    ).optional()?.ok_or("STALE_ESTIMATE")?;
+    let deposit = input.deposit_cents.unwrap_or(saved_deposit);
+    check_bill_amount("estimate", input.amount_cents, deposit, input.total_cents)?;
+    let status = if input.amount_cents == 0 {
+        "paid"
+    } else {
+        "due"
+    };
+    tx.execute(
+        "UPDATE entries SET title = ?1, month = ?2, amount_cents = ?3, status = ?4, deposit_cents = ?5
+         WHERE id = ?6",
+        params![title, input.month, input.amount_cents, status, deposit, input.id],
     )?;
-    if changed == 0 {
-        return Err("STALE_ESTIMATE".into());
-    }
     sync::capture(&tx, [("entry", input.id.as_str())])?;
     tx.commit()?;
     Ok(())
@@ -419,7 +483,7 @@ fn change_payment(
     let mut changed = Vec::new();
     {
         let mut update = tx.prepare(
-            "UPDATE entries SET status = ?1 WHERE id = ?2 AND status = ?3 AND voided = 0
+            "UPDATE entries SET status = ?1 WHERE id = ?2 AND status = ?3 AND voided = 0 AND amount_cents > 0
              AND (?4 = 0 OR EXISTS(SELECT 1 FROM sync_undoable WHERE entry_id=?2))",
         )?;
         for id in ids {

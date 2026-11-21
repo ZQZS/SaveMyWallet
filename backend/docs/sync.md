@@ -17,6 +17,8 @@ Windows 和安卓始终从各自的 SQLite 读取账本。业务写入与待上�
 | `PATCH /payments` | `{ "ids": ["e1", "e2"], "paid": true }` | `200 { "changedIds": ["e1"] }`，仅含此次实际改变的明细 |
 | `PUT /budget` | `{ "month": "2027-01", "defaultSalaryCents": 600000, "warningFloorCents": 80000, "overrideSalaryCents": 0 }` | `204`。单月覆盖为 `0` 表示该月无工资，`null` 表示清除覆盖 |
 
+创建或确认预计补款时，`amountCents` 表示本期应补尾款，`depositCents` 表示已付定金，`totalCents` 表示商品总价。例如总价 100 元、定金 25 元时，提交 `{ "totalCents": 10000, "depositCents": 2500, "amountCents": 7500 }` 这三个金额字段。总价必须大于零，定金可从零到总价。提交总价时，服务端会核对它等于定金和尾款之和。创建时未传定金默认为零，确认时未传则沿用该账单的定金，传入零可清除定金。定金抵清全款时，账单可保留为待确认的预计补款，确认后直接标记已付，批量勾选及撤销会跳过这条零尾款账单。
+
 写接口均可携带 `Idempotency-Key` 请求头。调用方为一次用户提交生成一个随机操作 ID，直到收到结果都重用这个 ID 和相同请求。缺少该请求头时，每次请求都是一次新的提交。业务接口与同步接口写入同一个账本，在线业务接口的改动也会进入增量流。当前 Vue 页面走 SQLite，原生同步使用下述协议，离线分期会带上已在设备中生成的各期 ID。[Axios 路径与类型](../../frontend/src/integrations/api/ledgerApi.ts)
 
 使用现有 Axios 适配器直接在线提交分期时，可调用 `repository.createBill(input, operationId)`。调用方在第一次发送前保存这个 ID，遇到超时或响应丢失时传回同一个 ID。相同内容的两次独立消费各用一个 ID。客户端的离线同步由 SQLite 自动持久化操作 ID。
@@ -31,6 +33,8 @@ Windows 和安卓始终从各自的 SQLite 读取账本。业务写入与待上�
 | `entry` | 单条明细的稳定 ID，每期一个 | `{id,platformId,title,month,amountCents,kind,status,installmentIndex,installmentCount}` |
 | `setting` | `defaultSalaryCents` 或 `warningFloorCents` | 整数分 |
 | `override` | 归属月，如 `2027-01` | 整数分，删除记录时为 `null` |
+
+有定金的预计补款在 `entry` 值中增加正整数 `depositCents`，总价由 `amountCents + depositCents` 计算。同步值在定金为零时省略该字段，旧记录及已冻结的待重试操作保留原有形状。月度汇总始终只计入 `amountCents`。服务使用 PostgreSQL 的 JSONB 保存完整记录、变更和回执，历史数据无需回填。开始同步含定金的账本前，请先更新服务端及参与同步的设备。
 
 作废的 `entry` 在完整记录中增加 `"voided": true`，有效和恢复后的记录省略该字段。作废保留原状态、金额和分期期数，客户端在月度汇总中跳过该笔金额。批量还款跳过已作废明细，确认补款须先恢复。其他设备同期修改同一明细时，服务按完整记录的版本处理冲突。同步含作废明细的账本前，应将服务和各设备升级到支持该字段的版本。
 

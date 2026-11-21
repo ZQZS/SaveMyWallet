@@ -1,10 +1,12 @@
 import { settingsNavigationMessages } from './settingsNavigation.ts'
+import { aiSettingsMessages } from './aiSettings.ts'
 import { syncMessages } from './sync.ts'
 import { syncConflictMessages } from './syncConflict.ts'
 
 export const settingsMessages = {
   'zh-CN': {
     ...settingsNavigationMessages['zh-CN'],
+    ...aiSettingsMessages['zh-CN'],
     ...syncMessages['zh-CN'],
     ...syncConflictMessages['zh-CN'],
     'settings.action.cancel': '取消',
@@ -35,6 +37,7 @@ export const settingsMessages = {
   },
   'en-US': {
     ...settingsNavigationMessages['en-US'],
+    ...aiSettingsMessages['en-US'],
     ...syncMessages['en-US'],
     ...syncConflictMessages['en-US'],
     'settings.action.cancel': 'Cancel',

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, ref } from 'vue'
+import { nextTick, ref, useId } from 'vue'
 import { t } from '../../../i18n'
 import { Plus } from 'lucide-vue-next'
 import type { Platform } from '../../../domain/ledger'
@@ -11,6 +11,8 @@ const editing = defineModel<boolean>('editing', { required: true })
 const { name, errorKey, reset, submit } = usePlatformCreation()
 const input = ref<HTMLInputElement | null>(null)
 const select = ref<HTMLSelectElement | null>(null)
+const selectId = useId()
+const inputId = useId()
 
 function open() {
   reset()
@@ -41,19 +43,20 @@ function onEnter(event: KeyboardEvent) {
 <template>
   <div class="ledger-field">
     <div class="ledger-field-title">
-      <label for="bill-platform">{{ t('forms.platform') }}</label>
+      <label :for="selectId">{{ t('forms.platform') }}</label>
       <button v-if="!locked && !editing" type="button" class="ledger-text-btn" :disabled="busy" @click="open">
         <Plus :size="14" aria-hidden="true" />{{ t('forms.newPlatform') }}
       </button>
     </div>
-    <select id="bill-platform" ref="select" v-model="selectedId" name="platform" :disabled="locked || busy || editing" required>
+    <select :id="selectId" ref="select" v-model="selectedId" name="platform" :disabled="locked || busy || editing" required>
       <option v-if="!platforms.length" value="">{{ t('forms.noPlatform') }}</option>
+      <option v-else-if="!selectedId" disabled value="">{{ t('billImage.choosePlatform') }}</option>
       <option v-for="platform in platforms" :key="platform.id" :value="platform.id">{{ platform.name }}</option>
     </select>
   </div>
   <div v-if="editing" class="ledger-inline-platform ledger-wide">
-    <label class="ledger-field" for="inline-platform">{{ t('forms.newPlatformName') }}</label>
-    <input id="inline-platform" ref="input" v-model="name" class="ledger-input" :disabled="busy" :placeholder="t('forms.platformShortHint')"
+    <label class="ledger-field" :for="inputId">{{ t('forms.newPlatformName') }}</label>
+    <input :id="inputId" ref="input" v-model="name" class="ledger-input" :disabled="busy" :placeholder="t('forms.platformShortHint')"
       @keydown.enter="onEnter" @input="errorKey = ''" />
     <p v-if="errorKey" class="ledger-error" role="alert">{{ t(errorKey) }}</p>
     <div class="ledger-inline-actions">

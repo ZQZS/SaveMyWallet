@@ -4,14 +4,37 @@
 
 ## 在 Windows 上启动开发服务
 
-需要 .NET 10 SDK、一套可以连接的 PostgreSQL 和一个专用数据库。在有 PostgreSQL 管理权限的终端运行以下命令，可建立开发用角色和数据库。
+需要 .NET 10 SDK、一套可以连接的 PostgreSQL 和一个专用数据库。API 首次启动会建立表结构，数据库角色需要建表权限。在有 PostgreSQL 管理权限的终端运行以下命令，可建立开发用角色和数据库。
 
 ```powershell
 createuser -U postgres --pwprompt wallet_app
 createdb -U postgres --owner=wallet_app wallet_sync
 ```
 
-在**仓库根目录**打开 PowerShell 7，用环境变量设置连接串和账本访问令牌。连接串可填写 `Host=127.0.0.1;Port=5432;Database=wallet_sync;Username=wallet_app;Password=实际密码`。账本令牌由部署者生成，长度为 32–1024 个无空格的可打印 ASCII 字符，可用密码管理器生成一串足够长的随机字母和数字并保存。示例中 `personal` 是账本 ID。
+### 双击脚本
+
+在 Windows 资源管理器中打开 `backend` 目录，或从仓库根目录运行表中的命令。
+
+| 操作 | 双击 | PowerShell 命令 |
+| --- | --- | --- |
+| 构建并在后台启动 API | [start.cmd](start.cmd) | `.\backend\start.cmd` |
+| 关闭这份项目启动的 API | [stop.cmd](stop.cmd) | `.\backend\stop.cmd` |
+| 设置 API 监听端口 | [set-port.cmd](set-port.cmd) 后输入端口 | `.\backend\set-port.cmd 5280` |
+
+首次启动会沿用已有的环境变量或应用配置，并提示补齐缺少的项目。
+
+- **PostgreSQL 连接串**可填写 `Host=127.0.0.1;Port=5432;Database=wallet_sync;Username=wallet_app;Password=实际密码`。
+- **账本令牌**可用密码管理器生成并保存，长度为 32–1024 个无空格的可打印 ASCII 字符。脚本提示输入的令牌用于 `personal` 账本，客户端也使用同一令牌。
+
+手工输入的两项配置使用当前 Windows 用户的 DPAPI 加密，分别保存在 `.local/connection.dpapi` 和 `.local/personal-token.dpapi`。需要重新输入时，可关闭 API，移除对应文件再启动。
+
+默认 API 地址为 `http://127.0.0.1:5180`。端口范围为 1–65535，选择的端口保存在本机的 `.local/port.txt`。服务运行时改端口，先双击 `stop.cmd` 再双击 `start.cmd` 即可生效。重复启动会显示当前实例的地址。PostgreSQL 由其自身的服务管理。
+
+脚本运行失败时，可在 `.local/last-error.txt` 查看最近一次错误。API 的运行日志和错误日志分别在 `.local/server.stdout.log` 和 `.local/server.stderr.log`。
+
+### 手动启动
+
+也可以在**仓库根目录**打开 PowerShell 7，设置环境变量后在前台运行。示例中 `personal` 是账本 ID。
 
 ```powershell
 $env:ConnectionStrings__Ledger = Read-Host 'PostgreSQL 连接串' -MaskInput
@@ -20,7 +43,9 @@ $env:ASPNETCORE_URLS = 'http://127.0.0.1:5180'
 dotnet run --project ./backend/SaveMyWallet.Api --no-launch-profile
 ```
 
-服务会在指定的数据库中初始化表结构，数据库角色首次启动时需要建表权限。在另一个 PowerShell 7 窗口做一次认证读取，新的空账本将返回账本 ID、游标 `0` 和空记录数组。
+### 验证服务
+
+启动后，在 PowerShell 7 窗口用同一令牌读取账本。以下命令使用默认 API 端口。新的空账本会返回账本 ID、游标 `0` 和空记录数组。
 
 ```powershell
 $ledgerToken = Read-Host 'personal 账本令牌' -MaskInput
@@ -34,7 +59,7 @@ Invoke-RestMethod -Uri http://127.0.0.1:5180/sync/bootstrap -Headers $headers
 2. 在第二台设备输入同一地址和同一令牌。核对预览中的云端账本与记录数。**「绑定并使用服务器账本」会替换本机账本**。如果第二台设备已经单独记过账，先通过「导入与导出」导出，再决定是否使用云端版本。也可在同步页导出最近一次绑定前保留的本机备份。
 3. 断开网络，在任一设备创建一笔分期。恢复连接后点击「立即同步」，再在另一端同步并按月核对。客户端进程重启后需重新输入令牌并「解锁同步」，期间本机仍能记账。
 
-开发电脑可使用上述回环地址。安卓真机中的 `127.0.0.1` 指向手机自身。USB 联调时在开发电脑执行 `adb reverse tcp:5180 tcp:5180`，即可在安卓调试包中输入 `http://127.0.0.1:5180` 访问电脑上的开发服务。
+开发电脑可使用上述回环地址。安卓真机中的 `127.0.0.1` 指向手机自身。USB 联调时在开发电脑执行 `adb reverse tcp:5180 tcp:5180`，即可在安卓调试包中输入 `http://127.0.0.1:5180` 访问电脑上的开发服务。自定义 API 端口后，将示例命令和客户端地址中的 `5180` 换成所选端口。使用反向代理时，同步更新代理的后端端口。
 
 跨网络部署时，在服务前配置 HTTPS 反向代理并将域名指向两台设备都可达的主机，例 `https://wallet.example.com`。证书须受原生客户端使用的公共信任根信任。API 可继续只监听代理所在主机的回环端口。客户端接受完整 HTTPS 服务地址，明文 HTTP 仅限回环地址。
 

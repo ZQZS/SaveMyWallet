@@ -1,5 +1,6 @@
 import type { RouteRecordRaw } from 'vue-router'
 import SettingsHomePage from './SettingsHomePage.vue'
+import AiSettingsPage from './AiSettingsPage.vue'
 import LanguageSettingsPage from './LanguageSettingsPage.vue'
 import BackupSettingsPage from './BackupSettingsPage.vue'
 import ResetSettingsPage from './ResetSettingsPage.vue'
@@ -11,7 +12,7 @@ export const settingsRoutes: RouteRecordRaw[] = [
   { path: 'language', name: 'settings-language', component: LanguageSettingsPage },
   { path: 'backup', name: 'settings-backup', component: BackupSettingsPage },
   { path: 'reset', name: 'settings-reset', component: ResetSettingsPage },
-  { path: 'ai', name: 'settings-ai', component: PlannedSettingsPage, props: { kind: 'ai' } },
-  { path: 'pets', name: 'settings-pets', component: PlannedSettingsPage, props: { kind: 'pets' } },
+  { path: 'ai', name: 'settings-ai', component: AiSettingsPage },
+  { path: 'pets', name: 'settings-pets', component: PlannedSettingsPage },
   { path: 'connections', name: 'settings-connections', component: ConnectionsSettingsPage },
 ]

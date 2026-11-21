@@ -1,7 +1,7 @@
 use super::Record;
 use crate::ledger::{
-    bill_title, check_amount, month_index, platform_name, Entry, Platform, StorageResult,
-    LAST_MONTH,
+    bill_title, check_amount, check_entry_amount, month_index, platform_name, Entry, Platform,
+    StorageResult, LAST_MONTH,
 };
 use rusqlite::{params, Connection};
 use serde_json::Value;
@@ -26,12 +26,14 @@ fn money(value: &Value) -> StorageResult<i64> {
 fn apply_entry(conn: &Connection, id: &str, value: &Value) -> StorageResult<()> {
     let entry: Entry = serde_json::from_value(value.clone())?;
     let month = month_index(&entry.month)?;
-    check_amount(entry.amount_cents, 1)?;
+    check_entry_amount(&entry.kind, entry.amount_cents, entry.deposit_cents)?;
     if entry.id != id
+        || (entry.deposit_cents == 0 && value.get("depositCents").is_some())
         || !entry.has_valid_installment_id()
         || bill_title(&entry.title)? != entry.title
         || !matches!(entry.status.as_str(), "due" | "paid" | "estimated")
         || (entry.status == "estimated" && entry.kind != "estimate")
+        || (entry.status == "due" && entry.amount_cents == 0)
     {
         return Err("SYNC_INVALID_RECORD".into());
     }
@@ -74,15 +76,15 @@ fn apply_entry(conn: &Connection, id: &str, value: &Value) -> StorageResult<()> 
         _ => return Err("SYNC_INVALID_RECORD".into()),
     }
     conn.execute("INSERT INTO entries
-            (id,platform_id,title,month,amount_cents,status,kind,installment_index,installment_count,voided,installment_id)
-            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
+            (id,platform_id,title,month,amount_cents,status,kind,installment_index,installment_count,voided,installment_id,deposit_cents)
+            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
             ON CONFLICT(id) DO UPDATE SET platform_id=excluded.platform_id, title=excluded.title,
             month=excluded.month, amount_cents=excluded.amount_cents, status=excluded.status,
             kind=excluded.kind, installment_index=excluded.installment_index, installment_count=excluded.installment_count,
-            voided=excluded.voided, installment_id=excluded.installment_id",
+            voided=excluded.voided, installment_id=excluded.installment_id, deposit_cents=excluded.deposit_cents",
         params![entry.id, entry.platform_id, entry.title, entry.month, entry.amount_cents,
             entry.status, entry.kind, entry.installment_index, entry.installment_count, entry.voided,
-            entry.installment_id])?;
+            entry.installment_id, entry.deposit_cents])?;
     Ok(())
 }
 

@@ -79,6 +79,18 @@ fn confirm(db: &Database, id: &str, title: &str, month: &str, cents: i64) {
     db.access(|conn| ledger::confirm(conn, input)).unwrap();
 }
 
+fn unique_entry(db: &Database, title: &str) -> Value {
+    let ledger = snapshot(db);
+    let mut entries = ledger["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| entry["title"] == title);
+    let entry = entries.next().expect("entry present").clone();
+    assert!(entries.next().is_none(), "the estimate was duplicated");
+    entry
+}
+
 // Requires an isolated live API and an unused test ledger. Creates only synthetic data.
 #[test]
 #[ignore = "set SMW_TEST_URL and SMW_TEST_TOKEN for a disposable PostgreSQL-backed API"]
@@ -232,5 +244,104 @@ fn two_native_sqlite_replicas_sync_through_the_live_postgres_api() {
             assert_eq!(record["value"]["month"], expected_month);
             assert_eq!(record["value"]["amountCents"], expected_amount);
         }
+
+        verify_estimate_deposits(
+            (&windows, &windows_client),
+            (&android, &android_client),
+            &platform,
+            url,
+            &token,
+        )
+        .await;
     });
+}
+
+async fn verify_estimate_deposits(
+    (windows, windows_client): (&Database, &SyncClient),
+    (android, android_client): (&Database, &SyncClient),
+    platform: &str,
+    url: &str,
+    token: &str,
+) {
+    let partial = "已付部分定金";
+    let prepaid = "定金等于总价";
+    for (title, deposit) in [(partial, 2000), (prepaid, 10000)] {
+        let input = serde_json::from_value(json!({
+            "title":title, "platformId":platform, "kind":"estimate", "installmentCount":1,
+            "month":"2027-02", "totalCents":10000, "depositCents":deposit, "amountCents":10000 - deposit
+        })).unwrap();
+        windows
+            .access(|conn| ledger::add_bill(conn, input))
+            .unwrap();
+    }
+    windows_client.run(windows).await.unwrap();
+    android_client.run(android).await.unwrap();
+    let partial_id = unique_entry(android, partial)["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let prepaid_id = unique_entry(android, prepaid)["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for (title, deposit) in [(partial, 2000), (prepaid, 10000)] {
+        let entry = unique_entry(android, title);
+        assert_eq!(entry, unique_entry(windows, title));
+        assert_eq!(entry["depositCents"], deposit);
+        assert_eq!(entry["amountCents"], 10000 - deposit);
+        assert_eq!(entry["status"], "estimated");
+    }
+
+    // Same payable amount and month, but the users disagree on the deposit and total.
+    // The original amount-only confirmation also exercises retention of a stored deposit.
+    confirm(windows, &partial_id, partial, "2027-02", 8000);
+    let input = serde_json::from_value(json!({
+        "id":partial_id, "title":partial, "month":"2027-02",
+        "totalCents":11000, "depositCents":3000, "amountCents":8000
+    }))
+    .unwrap();
+    android.access(|conn| ledger::confirm(conn, input)).unwrap();
+    windows_client.run(windows).await.unwrap();
+    let blocked = android_client.run(android).await.unwrap();
+    let conflicts = blocked["conflicts"].as_array().unwrap();
+    assert_eq!(conflicts.len(), 1);
+    let conflict = &conflicts[0];
+    assert_eq!(conflict["changes"][0]["after"]["depositCents"], 3000);
+    assert_eq!(conflict["records"][0]["value"]["depositCents"], 2000);
+    let operation = conflict["operationId"].as_str().unwrap();
+    android
+        .access(|conn| ledger::sync::resolve(conn, operation, "local"))
+        .unwrap();
+    confirm(android, &prepaid_id, prepaid, "2027-02", 0);
+    let resolved = android_client.run(android).await.unwrap();
+    assert!(resolved["conflicts"].as_array().unwrap().is_empty());
+    windows_client.run(windows).await.unwrap();
+    let canonical = bootstrap(&transport().unwrap(), url, token, None)
+        .await
+        .unwrap();
+    for (title, id, deposit, amount, status) in [
+        (partial, &partial_id, 3000, 8000, "due"),
+        (prepaid, &prepaid_id, 10000, 0, "paid"),
+    ] {
+        let on_server = &canonical["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"].as_str() == Some(id.as_str()))
+            .unwrap()["value"];
+        for entry in [
+            unique_entry(windows, title),
+            unique_entry(android, title),
+            on_server.clone(),
+        ] {
+            assert_eq!(entry["depositCents"], deposit);
+            assert_eq!(entry["amountCents"], amount);
+            assert_eq!(entry["status"], status);
+            assert_eq!(entry["month"], "2027-02");
+        }
+    }
+    assert!(windows
+        .access(|conn| ledger::mark_payment(conn, &[prepaid_id], false))
+        .unwrap()
+        .is_empty());
 }

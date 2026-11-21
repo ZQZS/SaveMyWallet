@@ -22,6 +22,11 @@ internal static class LedgerCommands
         var title = LedgerRules.CleanText(input.Title, 120);
         var start = LedgerRules.Month(input.Month);
         var split = input.Kind == "installment";
+        if (input.Kind == "estimate")
+            LedgerRules.ValidateEstimateAmounts(input.AmountCents, input.DepositCents ?? 0, input.TotalCents);
+        else
+            LedgerRules.Require(input.TotalCents is null && input.DepositCents is null,
+                "invalid_deposit", "Only an estimate has a purchase total and deposit.");
         LedgerRules.Require(split ? input.InstallmentCount is >= 1 and <= 120 : input.Kind is "single" or "estimate",
                             "invalid_installment", "Invalid bill kind or number of periods.");
         // The native ledger ignores the form's installment count for single bills and estimates.
@@ -41,6 +46,7 @@ internal static class LedgerCommands
                 ["installmentCount"] = split ? JsonValue.Create(periods) : null
             };
             if (installmentId is not null) value["installmentId"] = installmentId;
+            if (input.DepositCents is > 0) value["depositCents"] = input.DepositCents.Value;
             changes.Add(new("entry", id, null, null, value));
         }
         return new(changes, null);
@@ -50,15 +56,18 @@ internal static class LedgerCommands
     {
         var title = LedgerRules.CleanText(input.Title, 120);
         LedgerRules.Month(input.Month);
-        LedgerRules.Require(input.AmountCents is >= 1 and <= LedgerRules.MaxCents, "invalid_amount", "Invalid bill amount.");
         var row = FindEntry(rows, id);
         var current = row.Value!.AsObject();
         if (current.ContainsKey("voided")) throw new LedgerException(409, "entry_voided", "Restore this bill before confirming it.");
         LedgerRules.Require(LedgerRules.Text(current["kind"], "kind") == "estimate", "invalid_kind", "Only estimates may be confirmed.");
+        var oldDeposit = current["depositCents"]?.GetValue<long>() ?? 0;
+        var deposit = input.DepositCents ?? oldDeposit;
+        LedgerRules.ValidateEstimateAmounts(input.AmountCents, deposit, input.TotalCents);
         if (LedgerRules.Text(current["status"], "status") != "estimated")
         {
             if (LedgerRules.Text(current["title"], "title") == title
                 && LedgerRules.Text(current["month"], "month") == input.Month
+                && deposit == oldDeposit
                 && JsonNode.DeepEquals(current["amountCents"], JsonValue.Create(input.AmountCents)))
                 return new([], null);
             throw new LedgerException(409, "already_confirmed", "This estimate was confirmed with different details.");
@@ -67,7 +76,9 @@ internal static class LedgerCommands
         updated["title"] = title;
         updated["month"] = input.Month;
         updated["amountCents"] = input.AmountCents;
-        updated["status"] = "due";
+        if (deposit == 0) updated.Remove("depositCents");
+        else updated["depositCents"] = deposit;
+        updated["status"] = input.AmountCents == 0 ? "paid" : "due";
         return new([new SyncChange("entry", id, row.Version, current, updated)], null);
     }
 
@@ -115,6 +126,7 @@ internal static class LedgerCommands
         {
             LedgerRules.ValidateId(id);
             if (!entries.TryGetValue(id, out var row)) continue;
+            if (row.Value!["amountCents"]!.GetValue<long>() == 0) continue;
             if (LedgerRules.Text(row.Value!["status"], "status") != (input.Paid ? "due" : "paid")) continue;
             var updated = row.Value!.DeepClone().AsObject();
             updated["status"] = input.Paid ? "paid" : "due";

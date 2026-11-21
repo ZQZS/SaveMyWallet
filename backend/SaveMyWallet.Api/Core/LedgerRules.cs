@@ -80,7 +80,7 @@ public static class LedgerRules
 
     private static void ValidateEntry(SyncChange change, JsonNode? previous, Dictionary<string, string> platforms)
     {
-        var row = ObjectWithFields(change.After, EntryFields, "voided", "installmentId");
+        var row = ObjectWithFields(change.After, EntryFields, "voided", "installmentId", "depositCents");
         if (row.ContainsKey("voided"))
             Require(row["voided"] is JsonValue flag && flag.TryGetValue<bool>(out var voided) && voided,
                     "invalid_voided", "Set voided to true for a voided bill. Omit it for an active bill.");
@@ -89,7 +89,6 @@ public static class LedgerRules
         var title = Text(row["title"], "title");
         Require(title == CleanText(title, 120), "invalid_title", "Bill titles must be trimmed.");
         var month = Month(Text(row["month"], "month"));
-        Amount(row["amountCents"], 1);
         var kind = Text(row["kind"], "kind");
         if (row.ContainsKey("installmentId"))
         {
@@ -102,6 +101,16 @@ public static class LedgerRules
         Require(kind is "single" or "installment" or "estimate", "invalid_kind", "Unknown bill kind.");
         Require((status is "due" or "paid") || (status == "estimated" && kind == "estimate"),
                 "invalid_status", "Invalid status for this bill kind.");
+        var deposit = row.ContainsKey("depositCents") ? Integer(row["depositCents"]) : 0;
+        Require(!row.ContainsKey("depositCents") || (kind == "estimate" && deposit > 0),
+                "invalid_deposit", "Only estimates may include a positive deposit. Omit a zero deposit.");
+        if (kind == "estimate")
+        {
+            var balance = Integer(row["amountCents"]);
+            ValidateEstimateAmounts(balance, deposit);
+            Require(balance != 0 || status != "due", "invalid_status", "A confirmed fully prepaid estimate must be paid.");
+        }
+        else Amount(row["amountCents"], 1);
         if (kind == "installment")
         {
             var count = Integer(row["installmentCount"]);
@@ -119,7 +128,8 @@ public static class LedgerRules
         }
         if (previous is null) return;
         if (row.ContainsKey("voided") || previous["voided"] is not null)
-            Require(EntryFields.All(key => JsonNode.DeepEquals(row[key], previous[key])),
+            Require(EntryFields.All(key => JsonNode.DeepEquals(row[key], previous[key]))
+                    && JsonNode.DeepEquals(row["depositCents"], previous["depositCents"]),
                     "invalid_transition", "Voiding or restoring a bill must preserve its details and payment status.");
 
         foreach (var key in new[] { "platformId", "kind", "installmentIndex", "installmentCount", "installmentId" })
@@ -157,6 +167,14 @@ public static class LedgerRules
     {
         var cents = Integer(value);
         Require(cents >= minimum && cents <= MaxCents, "invalid_amount", "Amount is outside the supported range in cents.");
+    }
+
+    internal static void ValidateEstimateAmounts(long balance, long deposit, long? total = null)
+    {
+        // Bound both operands before adding, including for inputs near Int64.MaxValue.
+        Require(deposit is >= 0 and <= MaxCents && balance >= 0 && balance <= MaxCents - deposit
+                && balance + deposit > 0, "invalid_amount", "The purchase total must be positive and cover the deposit.");
+        Require(total is null || total == balance + deposit, "invalid_amount", "The balance must equal the total less the deposit.");
     }
 
     private static long Integer(JsonNode? node)

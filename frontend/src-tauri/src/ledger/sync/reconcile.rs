@@ -94,12 +94,17 @@ fn desired(change: &Change, base: &Value) -> Value {
         }
     }
     if is_payment(change) && base.is_object() {
+        // A superseded confirmation may have left no outstanding balance to pay or undo.
+        if base["amountCents"] == 0 || base["status"] == "estimated" {
+            return base.clone();
+        }
         let mut value = base.clone();
         value["status"] = change.after["status"].clone();
         value
     } else if change.kind == "entry"
         && change.before["status"] == "estimated"
         && base["status"] == "paid"
+        && base["amountCents"] != 0
     {
         let mut value = change.after.clone();
         value["status"] = json!("paid");

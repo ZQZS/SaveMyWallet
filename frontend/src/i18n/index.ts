@@ -3,6 +3,9 @@ import { appMessages } from './messages/app.ts'
 import { formsMessages } from './messages/forms.ts'
 import { ledgerMessages } from './messages/ledger.ts'
 import { settingsMessages } from './messages/settings.ts'
+import { aiErrorMessages } from './messages/aiErrors.ts'
+import { aiMonthMessages } from './messages/aiMonth.ts'
+import { billImageMessages } from './messages/billImage.ts'
 
 export const languageOptions = [
   { value: 'zh-CN', label: '简体中文' },
@@ -12,8 +15,10 @@ export type AppLocale = typeof languageOptions[number]['value']
 const preferenceKey = 'savemywallet.locale'
 
 const catalogs: Record<AppLocale, Record<string, string>> = {
-  'zh-CN': { ...appMessages['zh-CN'], ...formsMessages['zh-CN'], ...ledgerMessages['zh-CN'], ...settingsMessages['zh-CN'] },
-  'en-US': { ...appMessages['en-US'], ...formsMessages['en-US'], ...ledgerMessages['en-US'], ...settingsMessages['en-US'] },
+  'zh-CN': { ...appMessages['zh-CN'], ...formsMessages['zh-CN'], ...ledgerMessages['zh-CN'], ...settingsMessages['zh-CN'],
+    ...aiErrorMessages['zh-CN'], ...aiMonthMessages['zh-CN'], ...billImageMessages['zh-CN'] },
+  'en-US': { ...appMessages['en-US'], ...formsMessages['en-US'], ...ledgerMessages['en-US'], ...settingsMessages['en-US'],
+    ...aiErrorMessages['en-US'], ...aiMonthMessages['en-US'], ...billImageMessages['en-US'] },
 }
 
 function savedLocale(): AppLocale {

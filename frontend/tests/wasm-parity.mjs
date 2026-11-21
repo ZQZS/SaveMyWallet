@@ -35,7 +35,7 @@ test('WASM 按平台和录入顺序汇总三种状态，保留大额整数分和
   const data = ledger([
     bill('c2', '卡/💳', december, MAX_AMOUNT_CENTS, 'paid'),
     { ...bill('s1', 'shop', december, 13001, 'due'), kind: 'installment', installmentIndex: 2, installmentCount: 4 },
-    bill('c1', '卡/💳', december, MAX_AMOUNT_CENTS - 1, 'estimated'),
+    { ...bill('c1', '卡/💳', december, MAX_AMOUNT_CENTS - 1, 'estimated'), depositCents: 1 },
     bill('jan', 'shop', january, 54050, 'due'),
     bill('orphan', 'missing-platform', december, 250, 'due'),
   ])

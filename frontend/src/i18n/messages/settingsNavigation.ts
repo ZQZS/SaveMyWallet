@@ -12,7 +12,6 @@ export const settingsNavigationMessages = {
     'settings.connections.title': '跨设备同步',
     'settings.language.display': '显示语言',
     'settings.planned': '规划中',
-    'settings.plan.ai': '后续版本将在这里配置模型服务和 API Key，用于还款提醒、对话和识图录入。',
     'settings.plan.pets': '后续版本将在这里选择角色、设置互动和提醒方式。安卓将先支持应用内桌宠。',
   },
   'en-US': {
@@ -28,7 +27,6 @@ export const settingsNavigationMessages = {
     'settings.connections.title': 'Device sync',
     'settings.language.display': 'Display language',
     'settings.planned': 'Planned',
-    'settings.plan.ai': 'A future version will let you choose a model and set an API key for repayment reminders, chat, and entry from bill images.',
     'settings.plan.pets': 'A future version will let you choose a pet and configure interactions and reminders. On Android, the pet will first appear inside the app.',
   },
 } as const

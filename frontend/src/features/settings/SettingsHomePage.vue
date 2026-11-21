@@ -28,7 +28,8 @@ const sections = [
             <span class="item-icon"><component :is="link.icon" :size="19" aria-hidden="true" /></span>
             <span class="item-title">{{ t('settings.' + link.key + '.title') }}</span>
             <span v-if="link.key === 'language'" class="item-meta">{{ languageOptions.find(option => option.value === locale)?.label }}</span>
-            <span v-else-if="section.key === 'extensions'" class="item-meta">{{ t('settings.planned') }}</span>
+            <span v-else-if="link.key === 'ai'" class="item-meta">DeepSeek</span>
+            <span v-else-if="link.key === 'pets'" class="item-meta">{{ t('settings.planned') }}</span>
             <ChevronRight class="item-arrow" :size="17" aria-hidden="true" />
           </RouterLink>
         </li>

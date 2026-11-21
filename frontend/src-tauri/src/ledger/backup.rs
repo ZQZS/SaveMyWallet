@@ -1,6 +1,6 @@
 use super::{
-    bill_title, check_amount, month_index, platform_name, snapshot, Ledger, StorageResult,
-    LAST_MONTH,
+    bill_title, check_amount, check_entry_amount, month_index, platform_name, snapshot, Ledger,
+    StorageResult, LAST_MONTH,
 };
 use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 use serde::de::{Error as _, MapAccess, Visitor};
@@ -45,7 +45,9 @@ pub fn export(conn: &mut Connection) -> StorageResult<String> {
 pub(super) fn encode(ledger: Ledger) -> StorageResult<String> {
     let backup = Backup {
         format: FORMAT,
-        version: if ledger
+        version: if ledger.entries.iter().any(|entry| entry.deposit_cents != 0) {
+            4
+        } else if ledger
             .entries
             .iter()
             .any(|entry| entry.installment_id.is_some())
@@ -117,7 +119,7 @@ pub(super) fn validate(ledger: &Ledger) -> StorageResult<()> {
     let mut periods = HashSet::new();
     for entry in &ledger.entries {
         let month = month_index(&entry.month)?;
-        check_amount(entry.amount_cents, 1)?;
+        check_entry_amount(&entry.kind, entry.amount_cents, entry.deposit_cents)?;
         if !valid_id(&entry.id)
             || !entry_ids.insert(entry.id.as_str())
             || !entry.has_valid_installment_id()
@@ -125,6 +127,7 @@ pub(super) fn validate(ledger: &Ledger) -> StorageResult<()> {
             || bill_title(&entry.title)? != entry.title
             || !matches!(entry.status.as_str(), "due" | "paid" | "estimated")
             || (entry.status == "estimated" && entry.kind != "estimate")
+            || (entry.status == "due" && entry.amount_cents == 0)
         {
             return Err(INVALID.into());
         }
@@ -175,13 +178,14 @@ fn decode(contents: &str) -> StorageResult<Ledger> {
     if envelope.format != FORMAT {
         return Err("BACKUP_FORMAT".into());
     }
-    if !(1..=3).contains(&envelope.version) {
+    if !(1..=4).contains(&envelope.version) {
         return Err("BACKUP_VERSION".into());
     }
     let ledger: Ledger = serde_json::from_str(envelope.ledger.get()).map_err(|_| INVALID)?;
     if ledger.entries.iter().any(|entry| {
         (envelope.version < 2 && entry.voided)
             || (envelope.version < 3 && entry.installment_id.is_some())
+            || (envelope.version < 4 && entry.deposit_cents != 0)
     }) {
         return Err(INVALID.into());
     }
@@ -212,8 +216,8 @@ fn replace(tx: &Transaction<'_>, ledger: Ledger) -> rusqlite::Result<()> {
     }
     {
         let mut insert = tx.prepare(
-            "INSERT INTO entries (id, platform_id, title, month, amount_cents, status, kind, installment_index, installment_count, voided, installment_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
+            "INSERT INTO entries (id, platform_id, title, month, amount_cents, status, kind, installment_index, installment_count, voided, installment_id, deposit_cents)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)"
         )?;
         for entry in ledger.entries {
             insert.execute(params![
@@ -227,7 +231,8 @@ fn replace(tx: &Transaction<'_>, ledger: Ledger) -> rusqlite::Result<()> {
                 entry.installment_index,
                 entry.installment_count,
                 entry.voided,
-                entry.installment_id
+                entry.installment_id,
+                entry.deposit_cents
             ])?;
         }
     }

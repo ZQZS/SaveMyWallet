@@ -19,6 +19,8 @@ SaveMyWallet 是面向 Windows 和 Android 的离线月度还款账本。把京�
 
 ## 启动和构建
 
+要启动跨设备同步使用的账本服务，先按[后端说明](backend/README.md)准备 PostgreSQL，再双击 [backend/start.cmd](backend/start.cmd)。默认地址为 `http://127.0.0.1:5180`，可用 [backend/set-port.cmd](backend/set-port.cmd) 修改端口，使用 [backend/stop.cmd](backend/stop.cmd) 关闭服务。
+
 在仓库根目录打开 PowerShell。桌面开发需要 Node.js 22.18 或更高版本、Rust stable、MSVC C++ Build Tools 和 WebView2。以下命令启动带本机 SQLite 的 Windows 客户端。
 
 ```powershell

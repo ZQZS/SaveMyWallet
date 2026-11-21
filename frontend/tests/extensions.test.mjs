@@ -15,7 +15,7 @@ test('远端仓库通过注入的 Axios 实例读写，撤销仅使用服务端�
   }
   const repository = createApiLedgerRepository(client)
   const bill = { platformId: 'p1', title: '样例', month: '2026-11', amountCents: 2980, kind: 'single', installmentCount: 1 }
-  const changes = { title: '补款', month: '2026-12', amountCents: 3200 }
+  const changes = { title: '补款', month: '2026-12', totalCents: 4200, depositCents: 1000, amountCents: 3200 }
   const budget = { month: '2026-12', defaultSalaryCents: 800000, warningFloorCents: 0, overrideSalaryCents: null }
 
   assert.deepEqual(await repository.load(), snapshot)

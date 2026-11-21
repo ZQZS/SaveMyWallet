@@ -7,11 +7,15 @@ public sealed record NewPlatform([property: JsonRequired] string Name);
 [JsonNumberHandling(JsonNumberHandling.Strict)]
 public sealed record NewBill([property: JsonRequired] string PlatformId, [property: JsonRequired] string Title,
     [property: JsonRequired] string Month, [property: JsonRequired] long AmountCents,
-    [property: JsonRequired] string Kind, [property: JsonRequired] uint InstallmentCount);
+    [property: JsonRequired] string Kind, [property: JsonRequired] uint InstallmentCount,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? TotalCents = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? DepositCents = null);
 
 [JsonNumberHandling(JsonNumberHandling.Strict)]
 public sealed record Confirmation([property: JsonRequired] string Title, [property: JsonRequired] string Month,
-    [property: JsonRequired] long AmountCents);
+    [property: JsonRequired] long AmountCents,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? TotalCents = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? DepositCents = null);
 
 public sealed record Payment([property: JsonRequired] string[] Ids, [property: JsonRequired] bool Paid);
 

@@ -123,6 +123,8 @@ fn bill(platform_id: &str, kind: &str, count: u32) -> BillInput {
         title: "画册".into(),
         month: "2026-12".into(),
         amount_cents: 30000,
+        total_cents: None,
+        deposit_cents: None,
         kind: kind.into(),
         installment_count: count,
     }
@@ -235,7 +237,7 @@ fn migrating_a_v2_queue_preserves_pending_period_ids_conflicts_and_cursor() {
     let version: u32 = db
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 5);
+    assert_eq!(version, 6);
     let saved = status(&db).unwrap();
     assert_eq!(saved["cursor"], 7);
     assert_eq!(saved["pending"], 2);
@@ -353,6 +355,10 @@ fn a_lost_installment_receipt_reuses_the_operation_and_all_twelve_period_ids_aft
 }
 
 fn confirmed_pair() -> (Connection, Connection, Value, String) {
+    conflicting_terms([("2026-12", 32000, 1000), ("2027-01", 35000, 5500)])
+}
+
+fn conflicting_terms(terms: [(&str, i64, i64); 2]) -> (Connection, Connection, Value, String) {
     let mut windows = database();
     let platform = ledger::snapshot(&mut windows)
         .unwrap()
@@ -364,10 +370,9 @@ fn confirmed_pair() -> (Connection, Connection, Value, String) {
     let mut android = database();
     bind(&mut android, URL, &seed, "replace").unwrap();
     let id = entries(&mut android)[0]["id"].as_str().unwrap().to_owned();
-    for (device, month, amount_cents) in [
-        (&mut windows, "2026-12", 32000),
-        (&mut android, "2027-01", 35000),
-    ] {
+    for (device, (month, amount_cents, deposit)) in
+        [&mut windows, &mut android].into_iter().zip(terms)
+    {
         ledger::confirm(
             device,
             ConfirmInput {
@@ -375,6 +380,8 @@ fn confirmed_pair() -> (Connection, Connection, Value, String) {
                 title: "画册".into(),
                 month: month.into(),
                 amount_cents,
+                total_cents: Some(amount_cents + deposit),
+                deposit_cents: Some(deposit),
             },
         )
         .unwrap();
@@ -383,6 +390,120 @@ fn confirmed_pair() -> (Connection, Connection, Value, String) {
     ack(&mut windows, &receipt).unwrap();
     pull(&mut windows, &page(2, &receipt["records"])).unwrap();
     (windows, android, receipt, id)
+}
+
+#[test]
+fn choosing_between_equal_balances_keeps_the_reviewed_deposit() {
+    let (_, mut phone, remote, _) =
+        conflicting_terms([("2027-01", 32000, 1000), ("2027-01", 32000, 5500)]);
+    let request = next(&phone).unwrap().unwrap();
+    let op_id = request["operationId"].as_str().unwrap();
+    conflict(
+        &mut phone,
+        op_id,
+        &json!({"code":"conflict","cursor":2,"records":remote["records"]}),
+    )
+    .unwrap();
+    let state = status(&phone).unwrap();
+    let choice = &state["conflicts"][0];
+    assert_eq!(choice["changes"][0]["after"]["depositCents"], 5500);
+    assert_eq!(choice["records"][0]["value"]["depositCents"], 1000);
+    resolve(&mut phone, op_id, "local").unwrap();
+    let replacement = next(&phone).unwrap().unwrap();
+    let change = &replacement["changes"][0];
+    assert_eq!(
+        change["before"]["amountCents"],
+        change["after"]["amountCents"]
+    );
+    assert_eq!(change["after"]["depositCents"], 5500);
+    assert_eq!(next(&phone).unwrap().unwrap(), replacement);
+    ack(&mut phone, &accepted(&replacement, 3)).unwrap();
+    assert_eq!(entries(&mut phone)[0]["depositCents"], 5500);
+}
+
+#[test]
+fn resolving_a_prepaid_confirmation_keeps_payments_attached_to_the_relevant_balance() {
+    for choice in ["local", "remote"] {
+        let (_, mut phone, remote, id) =
+            conflicting_terms([("2027-01", 0, 10000), ("2027-01", 8000, 2000)]);
+        assert_eq!(remote["records"][0]["value"]["status"], "paid");
+        let request = next(&phone).unwrap().unwrap();
+        if choice == "remote" {
+            // Both changes applied to the local positive balance before the remote receipt arrived.
+            ledger::mark_payment(&mut phone, std::slice::from_ref(&id), true).unwrap();
+            ledger::undo_payment(&mut phone, &[id], false).unwrap();
+        }
+        let op_id = request["operationId"].as_str().unwrap();
+        conflict(
+            &mut phone,
+            op_id,
+            &json!({"code":"conflict","cursor":2,"records":remote["records"]}),
+        )
+        .unwrap();
+        resolve(&mut phone, op_id, choice).unwrap();
+        if choice == "local" {
+            let wire = next(&phone).unwrap().unwrap();
+            assert_eq!(wire["changes"][0]["after"]["status"], "due");
+            ack(&mut phone, &accepted(&wire, 3)).unwrap();
+            let entry = &entries(&mut phone)[0];
+            assert_eq!(entry["amountCents"], 8000);
+            assert_eq!(entry["depositCents"], 2000);
+        } else {
+            assert_eq!(entries(&mut phone)[0], remote["records"][0]["value"]);
+        }
+        assert!(next(&phone).unwrap().is_none());
+    }
+}
+
+#[test]
+fn pulled_estimates_round_trip_deposits_and_invalid_splits_do_not_advance_the_cursor() {
+    let mut source = database();
+    let mut bill = bill(
+        &ledger::snapshot(&mut source).unwrap().platforms[0].id,
+        "estimate",
+        1,
+    );
+    bill.amount_cents = 0;
+    bill.deposit_cents = Some(12345);
+    bill.total_cents = Some(12345);
+    ledger::add_bill(&mut source, bill).unwrap();
+    let seed = publish(&mut source);
+    let mut device = database();
+    bind(&mut device, URL, &seed, "replace").unwrap();
+    let initial = entries(&mut device).remove(0);
+    assert_eq!(initial["amountCents"], 0);
+    assert_eq!(initial["depositCents"], 12345);
+    assert_eq!(initial["status"], "estimated");
+    let mut record = seed["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["kind"] == "entry")
+        .unwrap()
+        .clone();
+    record["version"] = json!("adjustment");
+    let send = |db: &mut Connection, record: &Value| pull(db, &page(2, &json!([record])));
+    for (status, amount, deposit) in [
+        ("due", 0, 12345),
+        ("estimated", 12345, 0),
+        ("estimated", 1, -1),
+        ("estimated", 1, ledger::MAX_CENTS),
+    ] {
+        record["value"]["status"] = json!(status);
+        record["value"]["amountCents"] = json!(amount);
+        record["value"]["depositCents"] = json!(deposit);
+        assert!(send(&mut device, &record).is_err());
+        assert_eq!(entries(&mut device)[0], initial);
+    }
+    assert_eq!(status(&device).unwrap()["cursor"], 1);
+    // The next valid row may come from a legacy device or clear a former deposit.
+    record["value"]["amountCents"] = json!(12345);
+    record["value"]
+        .as_object_mut()
+        .unwrap()
+        .remove("depositCents");
+    send(&mut device, &record).unwrap();
+    assert_eq!(entries(&mut device)[0], record["value"]);
 }
 
 #[test]
@@ -434,6 +555,8 @@ fn resolving_a_void_conflict_preserves_the_other_devices_confirmation() {
             title: "新补款".into(),
             month: "2027-01".into(),
             amount_cents: 1200,
+            total_cents: None,
+            deposit_cents: None,
         },
     )
     .unwrap();
@@ -473,6 +596,8 @@ fn a_remote_void_blocks_a_local_confirmation_and_its_later_payment() {
             title: "补款".into(),
             month: "2027-02".into(),
             amount_cents: 2345,
+            total_cents: None,
+            deposit_cents: None,
         },
     )
     .unwrap();
@@ -535,6 +660,7 @@ fn conflicting_confirmations_preserve_local_draft_and_can_choose_remote() {
     }
     assert_eq!(entries(&mut android), entries(&mut windows));
     assert_eq!(entries(&mut android)[0]["month"], "2026-12");
+    assert_eq!(entries(&mut android)[0]["depositCents"], 1000);
     assert!(status(&android).unwrap()["conflicts"]
         .as_array()
         .unwrap()
@@ -577,6 +703,7 @@ fn choosing_local_rebases_the_confirm_and_keeps_a_later_offline_payment() {
     assert_eq!(final_entries[0]["id"], id);
     assert_eq!(final_entries[0]["month"], "2027-01");
     assert_eq!(final_entries[0]["amountCents"], 35000);
+    assert_eq!(final_entries[0]["depositCents"], 5500);
     assert_eq!(final_entries[0]["status"], "paid");
     assert_eq!(entries(&mut android), final_entries);
     assert!(next(&android).unwrap().is_none());
@@ -773,6 +900,7 @@ fn an_unrelated_entry_can_upload_while_a_confirmation_and_its_dependent_payment_
     );
     assert_eq!(payment["changes"][0]["after"]["status"], "paid");
     assert_eq!(payment["changes"][0]["after"]["amountCents"], 32000);
+    assert_eq!(payment["changes"][0]["after"]["depositCents"], 1000);
 }
 
 #[test]
@@ -801,6 +929,8 @@ fn resolving_either_of_two_conflicts_keeps_an_existing_in_flight_request_frozen(
                     title: entry["title"].as_str().unwrap().into(),
                     month: "2027-01".into(),
                     amount_cents: amount,
+                    total_cents: None,
+                    deposit_cents: None,
                 },
             )
             .unwrap();

@@ -363,6 +363,73 @@ test('two isolated ledgers sync through the running PostgreSQL API', async t => 
     assert.equal((await request(path, confirmation)).status, 204)
   })
 
+  await t.test('REST estimates keep the deposit and book only the unpaid balance', async () => {
+    const body = { platformId, kind: 'estimate', installmentCount: 1, title: '定金 REST', month: '2027-01',
+      totalCents: 10000, depositCents: 2500, amountCents: 7500 }
+    const create = (data, key) => request('/bills', { method: 'POST', body: data, key })
+    const lookup = async title => success(await request('/ledger')).entries.find(e => e.title === title)
+    const cursor = (await bootstrap()).cursor
+    for (const invalid of [
+      { amountCents: 7501 }, { depositCents: -1 }, { amountCents: -1, depositCents: 10001 },
+      { amountCents: 0, depositCents: 0, totalCents: 0 }, { totalCents: 100000000000, depositCents: 99999992500 },
+      { kind: 'single' }, { kind: 'installment' },
+    ]) assert.equal((await create({ ...body, ...invalid })).status, 400)
+    assert.equal((await bootstrap()).cursor, cursor)
+
+    const key = randomUUID()
+    success(await create(body, key))
+    success(await create(body, key))
+    assert.equal((await create({ ...body, totalCents: 11000, depositCents: 3500 }, key)).status, 409)
+    const estimate = await lookup(body.title)
+    assert.equal(estimate.amountCents, 7500)
+    assert.equal(estimate.depositCents, 2500)
+    assert.equal(estimate.status, 'estimated')
+    const path = '/bills/' + estimate.id + '/confirm'
+    const confirmation = { title: body.title, month: body.month, amountCents: 7000 }
+    success(await request(path, { method: 'POST', body: confirmation }))
+    success(await request(path, { method: 'POST', body: { ...confirmation, totalCents: 9500, depositCents: 2500 } }))
+    assert.equal((await request(path, { method: 'POST', body: { ...confirmation, depositCents: 0 } })).status, 409)
+    const updated = await lookup(body.title)
+    assert.deepEqual([updated.status, updated.amountCents, updated.depositCents], ['due', 7000, 2500])
+
+    const prepaid = { ...body, title: '定金付清', depositCents: 10000, amountCents: 0 }
+    success(await create(prepaid))
+    const full = await lookup(prepaid.title)
+    assert.equal(full.status, 'estimated')
+    success(await request('/bills/' + full.id + '/confirm', { method: 'POST', body: {
+      title: full.title, month: full.month, amountCents: 0, totalCents: 10000,
+    } }))
+    assert.equal((await lookup(full.title)).status, 'paid')
+    for (const paid of [true, false]) {
+      const payment = success(await request('/payments', { method: 'PATCH', body: { ids: [full.id], paid } }))
+      assert.deepEqual(payment.changedIds, [])
+    }
+  })
+
+  await t.test('sync validates canonical deposits and protects them across voiding, retries and stale writes', async () => {
+    const estimate = { ...entry(platformId, 'estimate', '定金同步'), amountCents: 9250, depositCents: 1750 }
+    const edit = (after, previous) => push(operation([change('entry', estimate.id, after, previous)]))
+    for (const invalid of [
+      { depositCents: 0 }, { depositCents: null }, { depositCents: -1 }, { depositCents: 1.5 },
+      { kind: 'single', status: 'due' }, { amountCents: 99999999900 }, { totalCents: 11000 },
+      { status: 'due', amountCents: 0 },
+    ]) assert.equal((await edit({ ...estimate, ...invalid })).status, 400)
+    const op = operation([change('entry', estimate.id, estimate)])
+    const ack = success(await push(op))
+    assert.deepEqual(success(await push(op)), ack)
+    const current = ack.records[0]
+    const { depositCents, ...legacy } = estimate
+    const legacyBefore = { ...current, value: legacy }
+    assert.equal((await edit({ ...legacy, status: 'due' }, legacyBefore)).status, 409)
+    assert.equal((await edit({ ...legacy, voided: true }, current)).status, 400)
+    const voided = success(await edit({ ...estimate, voided: true }, current)).records[0]
+    const restored = success(await edit(estimate, voided)).records[0]
+    const corrected = { ...legacy, status: 'due' }
+    success(await edit(corrected, restored))
+    const pulled = success(await request('/sync/pull?cursor=' + ack.cursor)).records
+    assert.deepEqual(pulled.find(record => record.id === estimate.id).value, corrected)
+  })
+
   await t.test('authorization scopes snapshots, changes and operation receipts to the selected ledger', async () => {
     assert.deepEqual(await bootstrap(secondary), other)
     assert.deepEqual(success(await request('/sync/pull?cursor=0', { token: secondary })).records, [])

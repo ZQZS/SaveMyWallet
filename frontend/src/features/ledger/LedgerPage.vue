@@ -9,6 +9,7 @@ import MonthlyLedger from './components/MonthlyLedger.vue'
 import MonthSummary from './components/MonthSummary.vue'
 import NextMonthPreview from './components/NextMonthPreview.vue'
 import InstallmentScopeDialog from './components/InstallmentScopeDialog.vue'
+import MonthlyAssistant from '../ai/MonthlyAssistant.vue'
 
 const router = useRouter()
 const { data, month, busy, notice, lastPayment, selectMonth, commit, repository, calculateMonth } = useLedgerSession()
@@ -94,6 +95,8 @@ function applyVoided(entry: Entry, voided: boolean, whole: boolean) {
     <MonthSummary :totals="totals" :floor="data.settings.warningFloorCents"
       :has-override="data.salaryOverrides[month] !== undefined" :busy="busy"
       @budget="router.push({ name: 'budget' })" />
+
+    <MonthlyAssistant :key="month" :month="month" :ledger="data" :summary="totals" />
 
     <MonthlyLedger :key="month" :groups="totals.groups" :paid="totals.paid" :busy="busy"
       @pay="markPayments" @set-voided="chooseVoidScope" @confirm="router.push({ name: 'bill-confirm', params: { id: $event.id } })" />
