@@ -66,6 +66,11 @@ fn set_entry_voided(db: State<'_, Database>, id: String, voided: bool) -> Result
 }
 
 #[tauri::command(async)]
+fn void_entries(db: State<'_, Database>, ids: Vec<String>) -> Result<Vec<String>, String> {
+    db.access(|conn| ledger::set_entries_voided(conn, &ids, true))
+}
+
+#[tauri::command(async)]
 fn set_installment_voided(
     db: State<'_, Database>,
     id: String,
@@ -139,6 +144,7 @@ pub fn run() {
             ai::credentials::ai_remove_key,
             ai::ai_test_key,
             ai::ai_explain,
+            ai::spending::ai_classify_spending,
             ai::pet_chat::ai_pet_chat,
             ai::ai_parse_scenario,
             ai::assistant_inputs::ai_parse_notice,
@@ -155,6 +161,7 @@ pub fn run() {
             create_bills,
             confirm_estimate,
             set_entry_voided,
+            void_entries,
             set_installment_voided,
             set_payment,
             undo_payment,

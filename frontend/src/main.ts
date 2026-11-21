@@ -8,10 +8,20 @@ import { sqliteRepository } from './data/sqlite'
 import { summarize } from './domain/ledger'
 import './shared/styles/base.css'
 import { locale, t } from './i18n'
+import { themeVariables, useAppearance } from './features/appearance/appearance'
 
+const { style: appearance } = useAppearance()
+watchEffect(() => {
+  const root = document.documentElement
+  root.dataset.themeBase = appearance.value.base
+  for (const [key, value] of Object.entries(themeVariables(appearance.value))) root.style.setProperty(key, value)
+})
 const session = createLedgerSession({ repository: sqliteRepository, calculateMonth: summarize })
 const router = createAppRouter(session)
-const canRefresh = () => router.currentRoute.value.name === 'ledger' || router.currentRoute.value.meta.menu === 'settings'
+const canRefresh = () => {
+  const route = router.currentRoute.value
+  return route.name === 'ledger' || route.name === 'statistics' || route.meta.menu === 'platforms' || route.meta.menu === 'settings'
+}
 const sync = createSyncSession(invoke, session, canRefresh)
 const app = createApp(App)
 app.provide(ledgerSessionKey, session)

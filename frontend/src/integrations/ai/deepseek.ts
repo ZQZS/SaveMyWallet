@@ -57,6 +57,10 @@ export function explainMonth(facts: ReminderFacts, language: AppLocale, signal?:
   return request<string>('ai_explain', { facts, language }, signal)
 }
 
+export function classifySpendingTitles(titles: string[], signal: AbortSignal) {
+  return request<unknown>('ai_classify_spending', { titles }, signal)
+}
+
 export interface PetChatMessage {
   role: 'user' | 'assistant'
   content: string

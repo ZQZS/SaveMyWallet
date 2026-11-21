@@ -1,11 +1,12 @@
-import { isMonth, MAX_AMOUNT_CENTS, type BillInput, type Platform } from '../../domain/ledger.ts'
-import { draftPlatformId, estimateAmountsConflict, type RecognizedBillDraft } from '../../integrations/ai/visionDrafts.ts'
+import { isMonth, MAX_AMOUNT_CENTS, type BillInput, type Entry, type Platform } from '../../domain/ledger.ts'
+import { draftPlatformId, estimateAmountsConflict, isHuabeiName, type RecognizedBillDraft } from '../../integrations/ai/visionDrafts.ts'
 import { readBillAmounts } from '../bills/billAmounts.ts'
 import { readInstallmentSchedule } from '../bills/installmentSchedule.ts'
 
 export interface ScreenshotReviewRow {
   draft: RecognizedBillDraft
   status: 'pending' | 'skipped' | 'saved'
+  skippedReview?: { platformId: string; matchId?: string }
 }
 
 export interface ScreenshotStatement {
@@ -46,6 +47,72 @@ export function screenshotPlatformId(platforms: Platform[], drafts: RecognizedBi
   return matches.size === 1 ? [...matches][0] : ''
 }
 
+type StatementLine = Pick<RecognizedBillDraft, 'kind' | 'month' | 'title' | 'amountCents' | 'installmentIndex' | 'installmentCount'>
+
+function statementLineKey(line: StatementLine): string | null {
+  const { kind, month, amountCents, installmentIndex, installmentCount } = line
+  const title = line.title?.trim()
+  if (!title || Array.from(title).length > 120 || !month || !isMonth(month)) return null
+  if (amountCents === null || !Number.isSafeInteger(amountCents) || amountCents <= 0 || amountCents > MAX_AMOUNT_CENTS) return null
+  if (kind === 'single') return JSON.stringify([kind, month, title, amountCents])
+  if (kind !== 'installment' || installmentIndex == null || installmentCount == null
+    || !readInstallmentSchedule(month, installmentCount, installmentIndex)) return null
+  return JSON.stringify([kind, month, title, amountCents, installmentIndex, installmentCount])
+}
+
+interface MatchContext {
+  platform?: Platform
+  batchPlatformId: string
+  monthlyStatement: boolean
+  edit?: { index: number; input: BillInput }
+}
+
+function isAlipayPlatform(name: string | null) {
+  return name === '支付宝' || isHuabeiName(name ?? '')
+}
+
+export function findStatementMatches(rows: ScreenshotReviewRow[], existing: Entry[], { platform, batchPlatformId, monthlyStatement, edit }: MatchContext) {
+  const matches = new Map<number, Entry>()
+  if (!platform) return matches
+  // A manually skipped match reserves only the original charge the reviewer actually saw.
+  const reserved = new Set<string>()
+  rows.forEach((row, index) => {
+    if (row.status === 'skipped' && index !== edit?.index && row.skippedReview?.matchId) reserved.add(row.skippedReview.matchId)
+  })
+  const previousMatchId = edit && rows[edit.index]?.skippedReview?.matchId
+  const editedKey = edit && previousMatchId ? statementLineKey(edit.input) : null
+  let previousMatch: Entry | undefined
+  const candidates = new Map<string, Entry[]>()
+  // Pop matches in snapshot order, consuming each existing charge at most once.
+  for (let i = existing.length - 1; i >= 0; i--) {
+    const entry = existing[i]
+    if (entry.platformId !== platform.id || entry.voided || entry.status === 'estimated' || reserved.has(entry.id)) continue
+    const key = statementLineKey(entry)
+    if (key === null) continue
+    if (entry.id === previousMatchId && key === editedKey) {
+      previousMatch = entry
+      continue
+    }
+    const group = candidates.get(key)
+    if (group) group.push(entry)
+    else candidates.set(key, [entry])
+  }
+  const checkAll = monthlyStatement || isAlipayPlatform(platform.name)
+  rows.forEach((row, index) => {
+    const edited = edit?.index === index ? edit.input : undefined
+    if (!edited && (row.status !== 'pending' || batchPlatformId !== platform.id)) return
+    if (!checkAll && !isAlipayPlatform(row.draft.platformHint)) return
+    if (edited && previousMatch) {
+      matches.set(index, previousMatch)
+      return
+    }
+    const key = statementLineKey(edited ?? row.draft)
+    const entry = key === null ? undefined : candidates.get(key)?.pop()
+    if (entry) matches.set(index, entry)
+  })
+  return matches
+}
+
 function amountText(cents: number | null | undefined) {
   return cents != null && Number.isSafeInteger(cents) ? String(cents / 100) : ''
 }
@@ -74,14 +141,20 @@ function reviewBill(draft: RecognizedBillDraft, platformId: string): BillInput |
   return { ...input, installmentCount, ...(installmentIndex === undefined ? {} : { installmentIndex }) }
 }
 
-export function prepareScreenshotBatch(rows: ScreenshotReviewRow[], platformId: string, statement: ScreenshotStatement | null = null) {
+export function prepareScreenshotBatch(
+  rows: ScreenshotReviewRow[], platformId: string, statement: ScreenshotStatement | null = null,
+  excludedMatches?: ReadonlyMap<number, Entry>, selectedIndices?: ReadonlySet<number>,
+) {
   const issues = new Map<number, string>()
   const inputs: BillInput[] = []
   const currentPeriods = new Map<string, number>()
-  let pendingCount = 0
+  const eligibleIndices: number[] = []
+  const pendingIndices: number[] = []
   rows.forEach((row, index) => {
-    if (row.status !== 'pending') return
-    pendingCount++
+    if (row.status !== 'pending' || excludedMatches?.has(index)) return
+    eligibleIndices.push(index)
+    if (selectedIndices && !selectedIndices.has(index)) return
+    pendingIndices.push(index)
     const input = reviewBill(row.draft, platformId)
     if (typeof input === 'string') {
       issues.set(index, input)
@@ -100,5 +173,6 @@ export function prepareScreenshotBatch(rows: ScreenshotReviewRow[], platformId: 
   const differenceCents = statement?.totalCents != null && details.totalCents !== null
     ? details.totalCents - statement.totalCents : null
   const canSaveTogether = platformId && !issues.size && (!statement || differenceCents === 0)
-  return { pendingCount, issues, inputs: canSaveTogether ? inputs : [], currentPeriods, details, differenceCents }
+  return { eligibleIndices, pendingCount: pendingIndices.length, pendingIndices, issues,
+    inputs: canSaveTogether ? inputs : [], currentPeriods, details, differenceCents }
 }

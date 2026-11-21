@@ -49,7 +49,7 @@ function kindLabel(row: PetChatDetail) {
 .detail-picker { min-width: 0; border: 1px solid var(--line); border-radius: 8px; }
 .detail-picker summary { padding: 7px 10px; color: var(--green); cursor: pointer; font-size: .82rem; font-weight: 650; }
 .detail-picker fieldset { min-width: 0; margin: 0; border: 0; padding: 0 10px; }
-.detail-picker input { flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--green); }
+.detail-picker input { flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--accent-solid); }
 .choose-all, .bill { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 .choose-all { min-height: 30px; border-top: 1px solid var(--line); font-size: .81rem; }
 .bill-list { max-height: clamp(5rem, 18dvh, 11rem); overflow: auto; overscroll-behavior: contain; }

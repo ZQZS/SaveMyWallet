@@ -381,6 +381,96 @@ fn add_three_period_purchase(db: &mut Connection, platform: &str, start: &str) {
 }
 
 #[test]
+fn batch_void_returns_only_selected_changes_in_one_sync_operation() {
+    let mut db = database();
+    let platform = add_platform(&db, "书店").unwrap();
+    add_three_period_purchase(&mut db, &platform, "2026-12");
+    let periods: Vec<_> = snapshot(&mut db)
+        .unwrap()
+        .entries
+        .into_iter()
+        .map(|e| e.id)
+        .collect();
+    add_bill(&mut db, bill(&platform, "定金", "2027-03", 800, "estimate")).unwrap();
+    add_bill(&mut db, bill(&platform, "旧记录", "2027-04", 500, "single")).unwrap();
+    let mut entries = snapshot(&mut db).unwrap().entries;
+    let already_voided = entries.pop().unwrap().id;
+    let estimate = entries.pop().unwrap().id;
+    set_entry_voided(&mut db, &already_voided, true).unwrap();
+    db.execute_batch(
+        "INSERT INTO sync_binding VALUES(1,'https://example.invalid','test',1);
+         INSERT INTO sync_shadow SELECT kind,id,value_json,'seed',1 FROM sync_local;",
+    )
+    .unwrap();
+    mark_payment(&mut db, &[periods[0].clone(), periods[2].clone()], true).unwrap();
+
+    let expected = [estimate.clone(), periods[1].clone(), periods[0].clone()];
+    let selected = [
+        estimate,
+        periods[1].clone(),
+        already_voided.clone(),
+        periods[0].clone(),
+        periods[1].clone(),
+    ];
+    assert_eq!(
+        set_entries_voided(&mut db, &selected, true).unwrap(),
+        expected
+    );
+    assert!(set_entries_voided(&mut db, &selected, true)
+        .unwrap()
+        .is_empty());
+    assert!(set_entries_voided(&mut db, &[], true).unwrap().is_empty());
+    let entries = snapshot(&mut db).unwrap().entries;
+    for e in &entries {
+        assert_eq!(e.voided, e.id == already_voided || expected.contains(&e.id));
+    }
+    assert_eq!(entries[0].status, "paid");
+    assert_eq!(entries[1].status, "due");
+    assert_eq!(entries[2].status, "paid");
+    assert_eq!(entries[3].status, "estimated");
+    let counts: (usize, usize) = db
+        .query_row(
+            "SELECT (SELECT count(*) FROM sync_queue), count(*) FROM sync_changes
+         WHERE operation_id=(SELECT operation_id FROM sync_queue ORDER BY seq DESC LIMIT 1)",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(counts, (2, 3)); // One payment, then one void operation containing three changes.
+    assert_eq!(
+        undo_payment(&mut db, &periods, false).unwrap(),
+        periods[2..]
+    );
+}
+
+#[test]
+fn batch_void_rolls_back_changes_and_payment_ownership_if_a_selected_id_is_missing() {
+    let mut db = database();
+    let platform = add_platform(&db, "书店").unwrap();
+    add_three_period_purchase(&mut db, &platform, "2026-12");
+    let id = snapshot(&mut db).unwrap().entries.remove(0).id;
+    db.execute_batch(
+        "INSERT INTO sync_binding VALUES(1,'https://example.invalid','test',1);
+         INSERT INTO sync_shadow SELECT kind,id,value_json,'seed',1 FROM sync_local;",
+    )
+    .unwrap();
+    mark_payment(&mut db, std::slice::from_ref(&id), true).unwrap();
+    for invalid in ["missing", ""] {
+        let error = set_entries_voided(&mut db, &[id.clone(), invalid.into()], true).unwrap_err();
+        assert_eq!(error.to_string(), "ENTRY_NOT_FOUND");
+        assert!(snapshot(&mut db).unwrap().entries.iter().all(|e| !e.voided));
+        let operations: usize = db
+            .query_row("SELECT count(*) FROM sync_queue", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(operations, 1);
+    }
+    assert_eq!(
+        undo_payment(&mut db, std::slice::from_ref(&id), false).unwrap(),
+        [id]
+    );
+}
+
+#[test]
 fn voiding_a_whole_purchase_across_years_is_atomic_and_isolates_identical_purchases() {
     let mut db = database();
     let platform = add_platform(&db, "书店").unwrap();

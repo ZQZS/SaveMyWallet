@@ -12,7 +12,7 @@ import '../../shared/styles/ledger-forms.css'
 
 const route = useRoute()
 const returnToLedger = useReturnToLedger()
-const { data, month, busy, repository, commit, selectMonth } = useLedgerSession()
+const { data, month, calendarMonth, busy, repository, commit, selectMonth } = useLedgerSession()
 const confirming = computed(() => route.name === 'bill-confirm')
 const reviewingImage = ref(false)
 const initialDraft = computed(() => {
@@ -38,7 +38,8 @@ function save(input: BillInput) {
         totalCents: input.totalCents, depositCents: input.depositCents })
       : repository.createBill(input),
     () => {
-      selectMonth(input.month)
+      const carried = !entry && input.kind === 'estimate' && input.month < calendarMonth.value
+      selectMonth(carried ? calendarMonth.value : input.month)
       const message = entry ? t(input.amountCents === 0 ? 'forms.coveredEstimateConfirmed' : 'forms.estimateConfirmed')
         : input.kind === 'installment' ? t('forms.installmentsSaved', { count: input.installmentCount }) : t('forms.billSaved')
       void returnToLedger(message)

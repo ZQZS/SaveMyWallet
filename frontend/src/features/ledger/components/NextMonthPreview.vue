@@ -29,7 +29,7 @@ const emit = defineEmits<{ open: [month: string] }>()
 .next-month:hover:not(:disabled) { border-color: var(--green); }
 .next-description { flex: 1; display: grid; min-width: 0; gap: 3px; }
 .next-description strong, .next-balance strong { font-weight: 650; }
-.low { display: inline-block; color: #865418; }
+.low { display: inline-block; color: var(--warning-ink); }
 .next-balance { text-align: right; font-size: 0.88rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .next-month > svg { flex: none; color: var(--green); }
 @media (max-width: 650px) {

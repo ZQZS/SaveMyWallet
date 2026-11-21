@@ -452,8 +452,12 @@ pub fn confirm(conn: &Connection, input: ConfirmInput) -> StorageResult<()> {
 fn change_voided(tx: &Transaction<'_>, ids: &[String], voided: bool) -> StorageResult<Vec<String>> {
     let mut changed = Vec::new();
     let mut update = tx.prepare("UPDATE entries SET voided = ?1 WHERE id = ?2 AND voided <> ?1")?;
+    let mut exists = tx.prepare("SELECT EXISTS(SELECT 1 FROM entries WHERE id = ?)")?;
     for id in ids {
         if update.execute(params![voided, id])? == 0 {
+            if !exists.query_row([id], |row| row.get::<_, bool>(0))? {
+                return Err("ENTRY_NOT_FOUND".into());
+            }
             continue;
         }
         tx.execute("DELETE FROM sync_last_payment WHERE entry_id = ?", [id])?;
@@ -464,18 +468,19 @@ fn change_voided(tx: &Transaction<'_>, ids: &[String], voided: bool) -> StorageR
 }
 
 pub fn set_entry_voided(conn: &mut Connection, id: &str, voided: bool) -> StorageResult<()> {
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let exists: bool = tx.query_row(
-        "SELECT EXISTS(SELECT 1 FROM entries WHERE id = ?)",
-        [id],
-        |r| r.get(0),
-    )?;
-    if !exists {
-        return Err("ENTRY_NOT_FOUND".into());
-    }
-    change_voided(&tx, &[id.to_owned()], voided)?;
-    tx.commit()?;
+    set_entries_voided(conn, &[id.to_owned()], voided)?;
     Ok(())
+}
+
+pub fn set_entries_voided(
+    conn: &mut Connection,
+    ids: &[String],
+    voided: bool,
+) -> StorageResult<Vec<String>> {
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let changed = change_voided(&tx, ids, voided)?;
+    tx.commit()?;
+    Ok(changed)
 }
 
 pub fn mark_payment(

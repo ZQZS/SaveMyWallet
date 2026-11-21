@@ -28,7 +28,7 @@ function onLoad(event: Event) {
 .bill-preview figcaption { margin-bottom: 6px; }
 .preview-window { overflow: hidden; border-radius: 8px; background: var(--soft); }
 .preview-window.scrollable { max-height: 52vh; overflow-y: auto; }
-.preview-window:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.preview-window:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .image-preview { display: block; width: 100%; height: auto; max-height: 52vh; object-fit: contain; }
 .scrollable .image-preview { max-height: none; }
 </style>

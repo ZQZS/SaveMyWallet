@@ -210,7 +210,7 @@ function search() {
 <style scoped>
 .search-intent { gap: 12px; }
 textarea { min-width: 0; padding: 10px 12px; resize: vertical; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--ink); font: inherit; font-weight: 400; }
-:is(textarea, summary, a):focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+:is(textarea, summary, a):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .search-actions, .choices, .choice { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
 .search-actions a { color: var(--green); font-size: .875rem; }
 fieldset { margin: 0; min-width: 0; padding: 0; border: 0; }
@@ -219,6 +219,6 @@ summary { cursor: pointer; color: var(--green); font-weight: 600; font-size: .87
 .extra-fields { margin-top: 14px; }
 legend { margin-bottom: 6px; padding: 0; font-size: .875rem; font-weight: 600; }
 .choice { flex-wrap: nowrap; gap: 6px; min-height: 32px; font-size: .875rem; }
-.choice input { width: 17px; min-height: 17px; height: 17px; accent-color: var(--green); margin: 0; flex: none; }
+.choice input { width: 17px; min-height: 17px; height: 17px; accent-color: var(--accent-solid); margin: 0; flex: none; }
 @media (max-width: 480px) { .ledger-fields { grid-template-columns: minmax(0, 1fr); gap: 12px; } }
 </style>

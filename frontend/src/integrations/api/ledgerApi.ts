@@ -36,6 +36,12 @@ export function createApiLedgerRepository(client: AxiosInstance) {
         headers: { 'Idempotency-Key': operationId },
       })
     },
+    async voidEntries(ids: string[], operationId: string = crypto.randomUUID()) {
+      const { data } = await client.put<{ changedIds: string[] }>('/bills/voided', { ids }, {
+        headers: { 'Idempotency-Key': operationId },
+      })
+      return data.changedIds
+    },
     async setInstallmentVoided(id: string, voided: boolean, operationId: string = crypto.randomUUID()) {
       const { data } = await client.put<{ changedIds: string[] }>(
         '/bills/' + encodeURIComponent(id) + '/installment/voided', { voided },
@@ -43,8 +49,10 @@ export function createApiLedgerRepository(client: AxiosInstance) {
       )
       return data.changedIds
     },
-    async setPayment(ids, paid) {
-      const { data } = await client.patch<{ changedIds: string[] }>('/payments', { ids, paid })
+    async setPayment(ids, paid, operationId: string = crypto.randomUUID()) {
+      const { data } = await client.patch<{ changedIds: string[] }>('/payments', { ids, paid }, {
+        headers: { 'Idempotency-Key': operationId },
+      })
       return data.changedIds
     },
     async saveBudget(input) {

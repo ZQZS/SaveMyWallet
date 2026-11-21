@@ -17,7 +17,7 @@ export interface RecognizedBillDraft {
   installmentIndex?: number | null
 }
 
-function isHuabeiName(name: string): boolean {
+export function isHuabeiName(name: string): boolean {
   return /^(?:支付宝\s*)?花呗(?:分期)?$/.test(name)
 }
 

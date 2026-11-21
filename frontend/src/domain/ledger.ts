@@ -15,6 +15,8 @@ export interface Entry {
   platformId: string
   title: string
   month: string
+  /** Stored estimate month when the display month has been carried forward. */
+  carriedFromMonth?: string
   /** For an estimate this is the balance after the paid deposit. */
   amountCents: number
   depositCents?: number
@@ -65,6 +67,17 @@ export function isMonth(value: string): boolean {
 
 export function currentMonth(date = new Date()): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+}
+
+export function projectBillingMonths(ledger: LedgerData, calendarMonth: string): LedgerData {
+  if (!isMonth(calendarMonth)) return ledger
+  let entries: Entry[] | undefined
+  for (const [index, entry] of ledger.entries.entries()) {
+    if (entry.kind !== 'estimate' || entry.status !== 'estimated' || entry.voided || entry.month >= calendarMonth) continue
+    entries ??= ledger.entries.slice()
+    entries[index] = { ...entry, month: calendarMonth, carriedFromMonth: entry.carriedFromMonth ?? entry.month }
+  }
+  return entries ? { ...ledger, entries } : ledger
 }
 
 export function shiftMonth(month: string, delta: number): string {
@@ -130,6 +143,41 @@ interface Amounts {
   estimated: number
 }
 
+function addEntryAmount(amounts: Amounts, entry: Entry): void {
+  if (entry.voided) return
+  amounts.total += entry.amountCents
+  amounts[entry.status] += entry.amountCents
+}
+
+export interface PlatformSummary extends Amounts {
+  platform: Platform
+  entryCount: number
+  paidCount: number
+  dueCount: number
+  estimatedCount: number
+  voidedCount: number
+}
+
+export function summarizePlatforms(ledger: LedgerData): Map<string, PlatformSummary> {
+  const summaries = new Map<string, PlatformSummary>()
+  for (const platform of ledger.platforms) {
+    summaries.set(platform.id, {
+      platform,
+      total: 0, paid: 0, due: 0, estimated: 0,
+      entryCount: 0, paidCount: 0, dueCount: 0, estimatedCount: 0, voidedCount: 0,
+    })
+  }
+  for (const entry of ledger.entries) {
+    const summary = summaries.get(entry.platformId)
+    if (!summary) continue
+    summary.entryCount++
+    const status = entry.voided ? 'voided' : entry.status
+    summary[`${status}Count`]++
+    addEntryAmount(summary, entry)
+  }
+  return summaries
+}
+
 export interface PlatformGroup extends Amounts {
   platform: Platform
   entries: Entry[]
@@ -156,11 +204,7 @@ export function summarize(ledger: LedgerData, month: string): MonthlySummary {
     const entries = entriesByPlatform.get(platform.id)
     if (!entries) continue
     const group: PlatformGroup = { platform, entries, total: 0, due: 0, paid: 0, estimated: 0 }
-    for (const entry of entries) {
-      if (entry.voided) continue
-      group.total += entry.amountCents
-      group[entry.status] += entry.amountCents
-    }
+    for (const entry of entries) addEntryAmount(group, entry)
     for (const bucket of ['total', 'due', 'paid', 'estimated'] as const) summary[bucket] += group[bucket]
     summary.groups.push(group)
   }

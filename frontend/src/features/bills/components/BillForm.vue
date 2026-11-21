@@ -8,14 +8,17 @@ import { draftPlatformId, type RecognizedBillDraft } from '../../../integrations
 import PlatformPicker from '../../platforms/components/PlatformPicker.vue'
 import { readBillAmounts } from '../billAmounts'
 import { readInstallmentSchedule } from '../installmentSchedule'
+import { entryStatusLabel } from '../../../shared/entryStatusLabel'
 
 const props = defineProps<{
   platforms: Platform[]; month: string; entry: Entry | null; busy: boolean
   initialDraft?: Partial<RecognizedBillDraft>; initialPlatformId?: string; review?: boolean
+  matchExisting?: (input: BillInput) => Entry | undefined
 }>()
 const emit = defineEmits<{
   submit: [input: BillInput]
   cancel: []
+  skip: [input?: BillInput, match?: Entry]
 }>()
 
 const kinds = ['single', 'installment', 'estimate'] as const
@@ -26,6 +29,7 @@ const amount = ref('')
 const totalPrice = ref('')
 const deposit = ref('0')
 const month = ref('')
+let confirmationMonthEdited = false
 const count = ref('3')
 const installmentIndex = ref('1')
 const errorKey = ref('')
@@ -38,7 +42,7 @@ const reviewInstallment = computed(() => props.review && isInstallment.value)
 const schedule = computed(() => readInstallmentSchedule(month.value, Number(count.value),
   reviewInstallment.value ? Number(installmentIndex.value) : 1))
 
-watch([() => props.entry?.id, () => props.month, () => props.initialDraft], () => {
+watch([() => props.entry?.id, () => props.entry ? undefined : props.month, () => props.initialDraft], () => {
   const entry = props.entry
   const draft = props.initialDraft
   kind.value = entry?.kind ?? (draft ? draft.kind ?? '' : 'single')
@@ -52,11 +56,16 @@ watch([() => props.entry?.id, () => props.month, () => props.initialDraft], () =
   totalPrice.value = total == null ? '' : String(total / 100)
   deposit.value = String((entry?.depositCents ?? draft?.depositCents ?? 0) / 100)
   month.value = entry?.month ?? (draft ? draft.month ?? '' : props.month)
+  confirmationMonthEdited = false
   count.value = draft ? String(draft.installmentCount ?? '') : '3'
   installmentIndex.value = draft?.installmentIndex === null ? '' : String(draft?.installmentIndex ?? 1)
   errorKey.value = ''
   creatingPlatform.value = false
 }, { immediate: true })
+
+watch(() => props.entry?.month, effectiveMonth => {
+  if (effectiveMonth && !confirmationMonthEdited) month.value = effectiveMonth
+})
 
 watch(() => props.platforms, platforms => {
   if (!platforms.some(platform => platform.id === platformId.value)) {
@@ -64,28 +73,40 @@ watch(() => props.platforms, platforms => {
   }
 })
 
-function submit() {
-  if (props.busy || creatingPlatform.value) return
-  errorKey.value = ''
+const validatedInput = computed<BillInput | string>(() => {
   const trimmedTitle = title.value.trim()
   const validatedAmounts = amounts.value
-  if (!kind.value) {
-    errorKey.value = 'billImage.selectKind'
-  } else if (!props.platforms.some(platform => platform.id === platformId.value)) {
-    errorKey.value = 'forms.selectPlatformError'
-  } else if (!trimmedTitle || Array.from(trimmedTitle).length > 120) {
-    errorKey.value = 'forms.titleError'
-  } else if (typeof validatedAmounts === 'string') {
-    errorKey.value = validatedAmounts
-  } else if (!isMonth(month.value)) {
-    errorKey.value = 'forms.monthError'
-  } else if (isInstallment.value && !schedule.value) {
-    errorKey.value = reviewInstallment.value ? 'forms.reviewScheduleError' : 'forms.scheduleError'
-  } else {
-    emit('submit', { platformId: platformId.value, title: trimmedTitle, month: month.value, ...validatedAmounts,
-      kind: kind.value, installmentCount: isInstallment.value ? Number(count.value) : 1,
-      ...(reviewInstallment.value ? { installmentIndex: Number(installmentIndex.value) } : {}) })
+  if (!kind.value) return 'billImage.selectKind'
+  if (!props.platforms.some(platform => platform.id === platformId.value)) return 'forms.selectPlatformError'
+  if (!trimmedTitle || Array.from(trimmedTitle).length > 120) return 'forms.titleError'
+  if (typeof validatedAmounts === 'string') return validatedAmounts
+  if (!isMonth(month.value)) return 'forms.monthError'
+  if (isInstallment.value && !schedule.value) return reviewInstallment.value ? 'forms.reviewScheduleError' : 'forms.scheduleError'
+  return { platformId: platformId.value, title: trimmedTitle, month: month.value, ...validatedAmounts,
+    kind: kind.value, installmentCount: isInstallment.value ? Number(count.value) : 1,
+    ...(reviewInstallment.value ? { installmentIndex: Number(installmentIndex.value) } : {}) }
+})
+
+const matchedEntry = computed(() => props.matchExisting && typeof validatedInput.value !== 'string'
+  ? props.matchExisting(validatedInput.value) : undefined)
+const allowDuplicate = ref(false)
+const duplicateBlocked = computed(() => Boolean(matchedEntry.value) && !allowDuplicate.value)
+watch([validatedInput, matchedEntry], () => { allowDuplicate.value = false }, { flush: 'sync' })
+
+function skip() {
+  const input = validatedInput.value
+  emit('skip', typeof input === 'string' ? undefined : input, matchedEntry.value)
+}
+
+function submit() {
+  if (props.busy || creatingPlatform.value || duplicateBlocked.value) return
+  const input = validatedInput.value
+  if (typeof input === 'string') {
+    errorKey.value = input
+    return
   }
+  errorKey.value = ''
+  emit('submit', input)
 }
 </script>
 
@@ -120,7 +141,8 @@ function submit() {
         </label>
         <label class="ledger-field">
           <span>{{ t(entry ? 'forms.monthConfirmed' : reviewInstallment ? 'forms.monthCurrent' : isInstallment ? 'forms.monthFirst' : kind === 'estimate' ? 'forms.monthEstimated' : 'forms.monthDue') }}</span>
-          <input v-model="month" name="month" type="month" :min="MIN_MONTH" :max="MAX_MONTH" required :disabled="busy" />
+          <input v-model="month" name="month" type="month" :min="MIN_MONTH" :max="MAX_MONTH" required :disabled="busy"
+            @input="confirmationMonthEdited = true" />
         </label>
         <label v-if="reviewInstallment" class="ledger-field"><span>{{ t('forms.currentPeriod') }}</span>
           <input v-model="installmentIndex" name="installmentIndex" type="number" inputmode="numeric" min="1" :max="count || 120" step="1" required :disabled="busy" />
@@ -146,11 +168,22 @@ function submit() {
         </div>
       </div>
       <p v-else-if="kind === 'single'" class="ledger-hint">{{ t('forms.singleHelp') }}</p>
+      <div v-if="matchedEntry" class="ledger-summary ledger-summary-warning duplicate-review">
+        <strong>{{ t('billImage.possibleMatch') }}</strong>
+        <p>{{ matchedEntry.title }} · {{ formatMonth(matchedEntry.month) }} · {{ formatMoney(matchedEntry.amountCents) }} · {{ entryStatusLabel(matchedEntry) }}</p>
+        <label><input v-model="allowDuplicate" type="checkbox" :disabled="busy || creatingPlatform" />{{ t('billImage.allowDuplicate') }}</label>
+      </div>
       <p v-if="errorKey" class="ledger-error" role="alert">{{ t(errorKey) }}</p>
       <div class="ledger-form-actions">
-        <button type="button" class="ledger-secondary" :disabled="busy" @click="emit('cancel')">{{ t(review ? 'billImage.skip' : 'forms.cancel') }}</button>
-        <button type="submit" class="ledger-primary" :disabled="busy || creatingPlatform">{{ t(review ? 'billImage.confirm' : entry ? 'forms.confirmBill' : 'forms.saveBill') }}</button>
+        <button type="button" class="ledger-secondary" :disabled="busy" @click="review ? skip() : emit('cancel')">{{ t(review ? 'billImage.skip' : 'forms.cancel') }}</button>
+        <button type="submit" class="ledger-primary" :disabled="busy || creatingPlatform || duplicateBlocked">{{ t(review ? 'billImage.confirm' : entry ? 'forms.confirmBill' : 'forms.saveBill') }}</button>
       </div>
     </form>
   </section>
 </template>
+
+<style scoped>
+.duplicate-review { display: grid; gap: 4px; overflow-wrap: anywhere; }
+.duplicate-review label { display: flex; align-items: center; gap: 8px; min-height: 44px; }
+.duplicate-review input[type="checkbox"] { flex: none; width: 1.1rem; height: 1.1rem; min-height: 0; margin: 0; padding: 0; accent-color: var(--accent-solid); }
+</style>

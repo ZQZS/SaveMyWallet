@@ -119,22 +119,22 @@ function dismiss() {
 
 <style scoped>
 .ledger-pet { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 8px 16px; border: 1px solid var(--line); border-top: 0; border-radius: 0 0 16px 16px; }
-.ledger-pet button { color: var(--green); }
-.pet-identity, .chat-button, .switch-pet, .details-button, .dismiss { display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: 8px; background: transparent; }
+.pet-identity, .chat-button, .switch-pet, .details-button, .dismiss { display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: 8px; background: transparent; color: var(--green); }
 .pet-identity { min-width: 0; max-width: 100%; padding: 2px 4px; text-align: start; }
 .pet-identity strong { max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .88rem; }
 .portrait { flex: none; display: grid; place-items: center; width: 48px; height: 48px; border-radius: 12px; font-weight: 700; }
 .portrait img { width: 100%; height: 100%; object-fit: contain; }
 .portrait.imported { overflow: hidden; background: var(--soft); }
 .portrait.imported img { object-fit: cover; }
-.pet-bubble { flex: 0 1 auto; min-width: 0; max-width: 34rem; display: flex; align-items: flex-start; padding: 5px 2px 5px 12px; border-radius: 12px; background: var(--soft); }
+.pet-bubble { flex: 0 1 auto; min-width: 0; max-width: 34rem; display: flex; align-items: flex-start; padding: 5px 2px 5px 12px;
+  border-inline-start: 3px solid var(--green); border-radius: 12px; background: var(--soft); color: var(--ink); }
 .bubble-content { min-width: 0; padding: 4px 0; }
 .bubble-content p { max-height: 12rem; overflow: auto; overflow-wrap: anywhere; white-space: pre-line; font-size: .88rem; line-height: 1.5; }
 .dismiss { flex: none; justify-content: center; width: 36px; height: 32px; }
 .details-button { padding: 4px 0; font-size: .8rem; font-weight: 650; }
 .pet-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-inline-start: auto; }
 .switch-pet, .chat-button { min-height: 40px; padding: 4px 8px; font-size: .82rem; }
-.chat-button { background: var(--soft); font-weight: 650; }
+.chat-button { background: var(--accent-solid); color: var(--on-accent); font-weight: 650; }
 .switch-pet:hover, .pet-identity:hover, .dismiss:hover { background: var(--soft); }
 .details-button:hover { text-decoration: underline; }
 @media (max-width: 650px) {

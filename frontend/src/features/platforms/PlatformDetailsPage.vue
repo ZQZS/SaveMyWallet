@@ -1,28 +1,80 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowLeft, ChevronRight } from 'lucide-vue-next'
+import { ArrowLeft, Undo2 } from 'lucide-vue-next'
 import { useLedgerSession } from '../../app/ledgerSession'
 import type { Entry } from '../../domain/ledger'
 import { formatMoney, formatMonth, t } from '../../i18n'
-import BillEntryDescription from '../../shared/components/BillEntryDescription.vue'
 import { entryStatusLabel } from '../../shared/entryStatusLabel'
+import PlatformMonthEntries from './components/PlatformMonthEntries.vue'
+import PlatformSummary from './components/PlatformSummary.vue'
 import '../../shared/styles/ledger-forms.css'
 
 const props = defineProps<{ id: string }>()
-const { data: ledger } = useLedgerSession()
+const { data: ledger, platformSummaries, busy, needsReload, repository, commit, notice, lastPayment,
+  markPayments, undoPayment, invalidatePaymentUndo } = useLedgerSession()
 const router = useRouter()
-const platform = computed(() => ledger.value?.platforms.find(item => item.id === props.id))
+const locked = computed(() => busy.value || needsReload.value)
+const summary = computed(() => platformSummaries.value?.get(props.id))
+const platformEntries = computed(() => ledger.value?.entries.filter(entry => entry.platformId === props.id) ?? [])
+const selectedIds = ref(new Set<string>())
+const selected = computed(() => platformEntries.value.filter(entry => !entry.voided && selectedIds.value.has(entry.id)))
+const payable = computed(() => selected.value.filter(entry => entry.status === 'due' && entry.amountCents > 0))
+const voidDialog = ref<HTMLDialogElement | null>(null)
+let pendingVoid: { signature: string; operationId: string } | undefined
 const months = computed(() => {
   const groups = new Map<string, Entry[]>()
-  for (const entry of ledger.value?.entries ?? []) {
-    if (entry.platformId !== props.id) continue
+  for (const entry of platformEntries.value) {
     const group = groups.get(entry.month)
     if (group) group.push(entry)
     else groups.set(entry.month, [entry])
   }
   return [...groups].sort(([left], [right]) => right.localeCompare(left))
 })
+
+watch(() => props.id, () => {
+  selectedIds.value.clear()
+  pendingVoid = undefined
+  voidDialog.value?.close()
+})
+
+watch(platformEntries, entries => {
+  if (!selectedIds.value.size) return
+  const activeIds = new Set(entries.filter(entry => !entry.voided).map(entry => entry.id))
+  for (const id of selectedIds.value) {
+    if (!activeIds.has(id)) selectedIds.value.delete(id)
+  }
+  if (!selectedIds.value.size) voidDialog.value?.close()
+})
+
+function totalAmount(entries: Entry[]) {
+  return formatMoney(entries.reduce((total, entry) => total + entry.amountCents, 0))
+}
+
+function clearChanged(ids: string[]) {
+  for (const id of ids) selectedIds.value.delete(id)
+}
+
+function repaySelected() {
+  const ids = payable.value.map(entry => entry.id)
+  if (ids.length && !locked.value) return markPayments(ids, true, { platformId: props.id }, clearChanged)
+}
+
+function voidSelected() {
+  const entries = selected.value
+  if (!entries.length || locked.value) return
+  const ids = entries.map(entry => entry.id).sort()
+  const signature = JSON.stringify(ids)
+  if (pendingVoid?.signature !== signature) pendingVoid = { signature, operationId: crypto.randomUUID() }
+  const { operationId } = pendingVoid
+  voidDialog.value?.close()
+  return commit(() => repository.voidEntries(ids, operationId), changed => {
+    pendingVoid = undefined
+    clearChanged(ids)
+    invalidatePaymentUndo(changed)
+    notice.value = changed.length ? t('forms.voidedSelection', { count: changed.length }) : t('ledger.updated')
+  })
+}
 
 function backToPlatforms() {
   const list = { name: 'platforms' }
@@ -34,57 +86,72 @@ function backToPlatforms() {
 <template>
   <section v-if="ledger" class="ledger-editor" aria-labelledby="platform-detail-heading">
     <header class="ledger-form-head">
-      <button type="button" class="ledger-back" :aria-label="t('forms.backToPlatforms')" :title="t('forms.backToPlatforms')" @click="backToPlatforms">
+      <button type="button" class="ledger-back" :disabled="locked" :aria-label="t('forms.backToPlatforms')" :title="t('forms.backToPlatforms')" @click="backToPlatforms">
         <ArrowLeft :size="20" aria-hidden="true" />
       </button>
-      <h1 id="platform-detail-heading">{{ platform ? t('ledger.detailsFor', { name: platform.name }) : t('forms.platformNotFound') }}</h1>
+      <h1 id="platform-detail-heading">{{ summary ? t('ledger.detailsFor', { name: summary.platform.name }) : t('forms.platformNotFound') }}</h1>
     </header>
-    <template v-if="platform">
+    <template v-if="summary">
+      <section class="ledger-sheet" aria-labelledby="platform-summary-heading">
+        <h2 id="platform-summary-heading">{{ t('forms.allMonthsSummary') }}</h2>
+        <PlatformSummary :summary="summary" />
+        <button v-if="lastPayment?.platformId === id" type="button" class="ledger-text-btn undo" :disabled="locked" @click="undoPayment()">
+          <Undo2 :size="16" aria-hidden="true" />{{ t('ledger.undo') }}
+        </button>
+      </section>
       <p v-if="!months.length" class="ledger-sheet ledger-hint">{{ t('forms.platformBillsEmpty') }}</p>
-      <section v-for="[month, entries] in months" :key="month" class="ledger-sheet month-group" :aria-labelledby="'platform-month-' + month">
-        <header class="ledger-list-title">
-          <h2 :id="'platform-month-' + month"><time :datetime="month">{{ formatMonth(month) }}</time></h2>
-          <span>{{ t('forms.entryCount', { count: entries.length }) }}</span>
-        </header>
+      <PlatformMonthEntries v-for="[month, entries] in months" :key="month" v-model="selectedIds" :month="month" :entries="entries" :disabled="locked" />
+      <section v-if="selected.length" class="selection-bar" :aria-label="t('forms.selectedActions')">
+        <div class="selection-total">
+          <strong role="status">{{ t('forms.selectedBillsTotal', { count: selected.length, amount: totalAmount(selected) }) }}</strong>
+          <button type="button" class="ledger-text-btn" :disabled="locked" @click="selectedIds.clear()">{{ t('forms.clearSelection') }}</button>
+        </div>
+        <div class="ledger-form-actions">
+          <button type="button" class="ledger-secondary void-selection" :disabled="locked" @click="voidDialog?.showModal()">
+            {{ t('forms.voidSelected') }}
+          </button>
+          <button type="button" class="ledger-primary repay-selection" :disabled="locked || !payable.length" @click="repaySelected">
+            {{ t('forms.paySelected', { count: payable.length, amount: totalAmount(payable) }) }}
+          </button>
+        </div>
+      </section>
+      <dialog ref="voidDialog" class="void-dialog" aria-labelledby="void-heading">
+        <h2 id="void-heading">{{ t('forms.confirmVoidSelection', { count: selected.length }) }}</h2>
+        <p>{{ t('forms.voidSelectionImpact', { amount: totalAmount(selected) }) }}</p>
         <ul>
-          <li v-for="entry in entries" :key="entry.id">
-            <RouterLink class="bill-link" :to="{ name: 'ledger', query: { entry: entry.id } }">
-              <BillEntryDescription :entry="entry" />
-              <span class="bill-figures">
-                <small v-if="entry.kind === 'estimate'">{{ t('ledger.balancePayment') }}</small>
-                <strong :class="{ voided: entry.voided }">{{ formatMoney(entry.amountCents) }}</strong>
-                <small>{{ entryStatusLabel(entry) }}</small>
-              </span>
-              <ChevronRight :size="16" aria-hidden="true" />
-            </RouterLink>
+          <li v-for="entry in selected" :key="entry.id">
+            <span>{{ entry.title }}<small>{{ formatMonth(entry.month) }} · {{ entryStatusLabel(entry) }}</small></span>
+            <strong>{{ formatMoney(entry.amountCents) }}</strong>
           </li>
         </ul>
-      </section>
+        <div class="ledger-form-actions">
+          <button type="button" class="ledger-secondary" autofocus @click="voidDialog?.close()">{{ t('forms.cancel') }}</button>
+          <button type="button" class="ledger-secondary confirm-void" :disabled="locked || !selected.length" @click="voidSelected">{{ t('forms.confirmVoid') }}</button>
+        </div>
+      </dialog>
     </template>
   </section>
 </template>
 
 <style scoped>
 h1 { overflow-wrap: anywhere; }
-.month-group { gap: 12px; }
-.month-group ul { padding: 0; list-style: none; }
-.month-group li { border-top: 1px solid var(--line); }
-.bill-link {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, max-content) auto;
-  align-items: center;
-  gap: 12px;
-  min-height: 44px;
-  padding: 10px 0;
-  color: var(--ink);
-  text-decoration: none;
-}
-.bill-link:is(:hover, :focus-visible), .bill-link > svg { color: var(--green); }
-.bill-figures { display: grid; gap: 2px; max-width: 12em; text-align: right; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-.bill-figures small { color: var(--sub); font-size: .78rem; }
-.bill-figures .voided { color: var(--sub); text-decoration: line-through; }
-@media (max-width: 480px) {
-  .bill-link { gap: 6px; }
-  .bill-figures { max-width: 8em; }
+.undo { justify-self: start; }
+.selection-bar { position: sticky; z-index: 2; bottom: 12px; display: grid; gap: 8px;
+  padding: 12px 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface);
+  box-shadow: 0 3px 16px rgb(0 0 0 / 10%); }
+.selection-total { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.selection-total strong, .void-dialog strong { font-variant-numeric: tabular-nums; }
+.selection-total button { min-height: 32px; }
+.void-selection, .confirm-void { color: var(--danger-ink); }
+.void-dialog { width: min(26rem, calc(100% - 2rem)); max-height: calc(100% - 2rem); margin: auto; padding: 20px;
+  color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 14px; }
+.void-dialog::backdrop { background: var(--dialog-backdrop); }
+.void-dialog p { margin: 8px 0; color: var(--sub); }
+.void-dialog ul { padding: 0; margin-bottom: 16px; max-height: 38vh; overflow-y: auto; list-style: none; }
+.void-dialog li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 0;
+  border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.void-dialog small { display: block; color: var(--sub); }
+@media (max-width: 860px) {
+  .selection-bar { bottom: calc(64px + env(safe-area-inset-bottom)); }
 }
 </style>

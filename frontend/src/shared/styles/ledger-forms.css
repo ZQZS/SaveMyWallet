@@ -44,7 +44,7 @@
 }
 
 .ledger-editor :is(a, button, input, select):focus-visible {
-  outline: 2px solid var(--green);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -127,9 +127,9 @@
 }
 
 .ledger-primary {
-  border: 1px solid var(--green);
-  background: var(--green);
-  color: #fffef9;
+  border: 1px solid var(--accent-solid);
+  background: var(--accent-solid);
+  color: var(--on-accent);
 }
 
 .ledger-secondary {
@@ -195,9 +195,9 @@
 
 .ledger-summary > svg { flex: none; margin-top: 1px; }
 .ledger-summary p { margin-top: 3px; }
-.ledger-summary-warning { background: #fbefd4; color: #795523; }
+.ledger-summary-warning { background: var(--warning-bg); color: var(--warning-ink); }
 .ledger-hint { color: var(--sub); font-size: .84rem; font-weight: 400; }
-.ledger-error { color: #a03123; font-size: .875rem; }
+.ledger-error { color: var(--danger-ink); font-size: .875rem; }
 
 .ledger-platform-add {
   display: grid;
@@ -208,10 +208,11 @@
 
 .ledger-platform-list { gap: 13px; }
 .ledger-platform-list ul { list-style: none; padding: 0; }
-.ledger-platform-list li { border-top: 1px solid var(--line); }
+.ledger-platform-list li { padding-bottom: 16px; border-top: 1px solid var(--line); }
+.ledger-platform-list li:last-child { padding-bottom: 0; }
 .ledger-platform-list .platform-link {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 11px;
   padding: 13px 0;
@@ -219,10 +220,9 @@
   text-decoration: none;
 }
 
-.platform-link:is(:hover, :focus-visible) strong { color: var(--green); text-decoration: underline; }
-.platform-link strong { overflow-wrap: anywhere; font-size: .95rem; }
+.platform-link:is(:hover, :focus-visible) h3 { color: var(--green); text-decoration: underline; }
+.platform-link h3 { overflow-wrap: anywhere; font-size: 1rem; }
 .platform-link > svg { color: var(--green); }
-.platform-link > span:not(.ledger-platform-symbol),
 .ledger-list-title > span { color: var(--sub); font-size: .8rem; }
 
 .ledger-platform-symbol {

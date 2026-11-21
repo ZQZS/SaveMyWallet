@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { estimateTotalCents, type Entry } from '../../domain/ledger'
-import { formatMoney, t } from '../../i18n'
+import { formatMoney, formatMonth, t } from '../../i18n'
 
 const props = defineProps<{ entry: Entry }>()
 const description = computed(() => {
@@ -17,7 +17,9 @@ const description = computed(() => {
 <template>
   <span class="entry-title">
     <strong :class="{ voided: entry.voided }">{{ entry.title }}</strong>
-    <small>{{ description }}</small>
+    <small>{{ description }}<template v-if="entry.carriedFromMonth"> · {{ t('ledger.originalEstimateMonth', {
+      month: formatMonth(entry.carriedFromMonth),
+    }) }}</template></small>
     <small v-if="entry.kind === 'estimate'">{{ t('ledger.estimateBreakdown', {
       total: formatMoney(estimateTotalCents(entry)), deposit: formatMoney(entry.depositCents ?? 0),
     }) }}</small>

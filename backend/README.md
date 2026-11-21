@@ -2,9 +2,19 @@
 
 本服务使用 **ASP.NET Core 10、EF Core 10 和 PostgreSQL**。Windows 与安卓各自从本机 SQLite 读写。两台设备绑定同一服务上的同一账本后，可在联网时交换明细、还款状态和预算。断网录入的分期沿用本机分配的每一期 ID。两端把同一笔预计补款确认为不同金额或月份时，用户可以在设置中选择采用哪个版本。[同步协议与冲突处理](docs/sync.md)
 
+## 后端开发文档
+
+| 文档 | 适合查阅的内容 |
+| --- | --- |
+| [结构与开发指南](docs/architecture.md) | 七个项目的依赖、DTO 约定、业务和数据访问的边界、如何扩展并验证一个字段。 |
+| [数据库定义](docs/database.md) | PostgreSQL 表和列、约束与索引、事务和版本管理。 |
+| [账本 API 与同步协议](docs/sync.md) | REST 与同步请求的字段、响应、错误、游标、重试和冲突处理。 |
+
+解决方案使用 .NET 10 SDK。在仓库根目录运行 `dotnet build ./backend/SaveMyWallet.slnx -c Release` 可构建全部项目，也可以用 Visual Studio 打开[后端解决方案](SaveMyWallet.slnx)。
+
 ## 在 Windows 上启动开发服务
 
-需要 .NET 10 SDK、一套可以连接的 PostgreSQL 和一个专用数据库。API 首次启动会建立表结构，数据库角色需要建表权限。在有 PostgreSQL 管理权限的终端运行以下命令，可建立开发用角色和数据库。
+准备一套可连接的 PostgreSQL 和一个专用空数据库。API 首次启动会建立当前结构，数据库角色需要建表权限。已有其他版本结构时，为本版本创建独立数据库，并把连接串指向新库。以下命令可在有 PostgreSQL 管理权限的终端中建立开发用角色和数据库。
 
 ```powershell
 createuser -U postgres --pwprompt wallet_app
@@ -75,7 +85,7 @@ Invoke-RestMethod -Uri http://127.0.0.1:5180/sync/bootstrap -Headers $headers
 
 [协议文档](docs/sync.md)包含兼容 Axios 的账本接口、明细作废与恢复、同步请求与响应、版本与游标的区别、断线重试及人工裁决示例。
 
-在独立的测试数据库启动服务，设置两个不同令牌，分别映射到两个空测试账本。然后在仓库根目录运行黑盒集成测试。测试会写入测试数据，复跑时为这次运行配置新的空账本。
+在独立的测试数据库启动服务，用 `LedgerTokens__testA` 和 `LedgerTokens__testB` 分别配置两个空账本的令牌。在另一个 PowerShell 7 窗口切换到仓库根目录，设置对应的客户端环境变量后运行 Node.js 集成测试。测试会写入数据，每次复跑请使用新的空账本或新的专用测试数据库。
 
 ```powershell
 $env:SMW_TEST_URL = 'http://127.0.0.1:5180'
@@ -87,6 +97,7 @@ node --test backend/tests/sync.integration.mjs
 要验证两份独立 SQLite 均通过客户端的原生网络层与服务通信，另准备一个全新的空测试账本，在仓库根目录使用下列命令。此用例会模拟服务端成功提交后丢失回执、关闭并重开本地账本、重传分期和手动裁决两组补款冲突。
 
 ```powershell
+$env:SMW_TEST_URL = 'http://127.0.0.1:5180'
 $env:SMW_TEST_TOKEN = Read-Host '第三个空测试账本令牌' -MaskInput
 cargo test --manifest-path frontend/src-tauri/Cargo.toml two_native_sqlite_replicas_sync_through_the_live_postgres_api --lib -- --ignored
 ```

@@ -11,6 +11,8 @@ import ConnectionsSettingsPage from './ConnectionsSettingsPage.vue'
 export const settingsRoutes: RouteRecordRaw[] = [
   { path: '', name: 'settings', component: SettingsHomePage },
   { path: 'language', name: 'settings-language', component: LanguageSettingsPage },
+  { path: 'appearance', name: 'settings-appearance', component: () => import('../appearance/AppearanceSettingsPage.vue') },
+  { path: 'appearance/create', name: 'settings-theme-create', component: () => import('../appearance/ThemeWizard.vue') },
   { path: 'author', name: 'settings-author', component: AuthorSettingsPage },
   { path: 'backup', name: 'settings-backup', component: BackupSettingsPage },
   { path: 'reset', name: 'settings-reset', component: ResetSettingsPage },

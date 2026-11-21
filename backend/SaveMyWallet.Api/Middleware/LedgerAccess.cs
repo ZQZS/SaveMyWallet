@@ -1,7 +1,8 @@
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
-using SaveMyWallet.Api.Core;
+using SaveMyWallet.Core;
+using SaveMyWallet.Dto.QueryResultDto;
 
 namespace SaveMyWallet.Api.Middleware;
 
@@ -47,7 +48,7 @@ internal sealed class LedgerAccess
             && (expected.Count != 1 || expected[0] != matched.Id))
         {
             context.Response.StatusCode = 409;
-            await context.Response.WriteAsJsonAsync(new { code = "ledger_mismatch" });
+            await context.Response.WriteAsJsonAsync(new LedgerErrorQueryResultDto("ledger_mismatch"));
             return;
         }
         context.Items[ItemKey] = matched.Id;
@@ -58,6 +59,6 @@ internal sealed class LedgerAccess
     {
         context.Response.StatusCode = 401;
         context.Response.Headers.WWWAuthenticate = "Bearer";
-        return context.Response.WriteAsJsonAsync(new { code = "unauthorized" });
+        return context.Response.WriteAsJsonAsync(new LedgerErrorQueryResultDto("unauthorized"));
     }
 }

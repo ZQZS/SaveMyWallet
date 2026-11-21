@@ -109,6 +109,6 @@ onBeforeUnmount(() => { mounted = false; discardImage() })
 
 <style scoped>
 textarea { box-sizing: border-box; width: 100%; min-height: 110px; padding: 12px; resize: vertical; font: inherit; font-weight: 400; color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: 8px; }
-textarea:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+textarea:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .notice-preview { width: 100%; max-height: 48vh; object-fit: contain; background: var(--soft); border-radius: 8px; }
 </style>

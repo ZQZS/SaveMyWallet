@@ -40,6 +40,29 @@ test('远端仓库通过注入的 Axios 实例读写，撤销仅使用服务端�
   ])
 })
 
+test('批量还款和作废重试时复用原提交 ID，并返回服务端实际变更的明细', async () => {
+  const calls = []
+  const client = createApiClient('https://ledger.example.invalid')
+  client.defaults.adapter = async config => {
+    calls.push([config.method, config.url, JSON.parse(config.data), config.headers.get('Idempotency-Key')])
+    return { data: { changedIds: ['b2'] }, status: 200, statusText: 'OK', headers: {}, config }
+  }
+  const repo = createApiLedgerRepository(client)
+  const ids = ['b1', 'b2']
+  for (let attempt = 0; attempt < 2; attempt++) {
+    assert.deepEqual(await repo.setPayment(ids, true, 'payment-1'), ['b2'])
+    assert.deepEqual(await repo.voidEntries(ids, 'void-1'), ['b2'])
+  }
+  const payment = ['patch', '/payments', { ids, paid: true }, 'payment-1']
+  const voided = ['put', '/bills/voided', { ids }, 'void-1']
+  assert.deepEqual(calls, [payment, voided, payment, voided])
+  await repo.setPayment(ids, false)
+  await repo.setPayment(ids, false)
+  const generated = calls.slice(4).map(call => call[3])
+  assert.ok(generated.every(key => typeof key === 'string' && key.length > 0))
+  assert.notEqual(generated[0], generated[1])
+})
+
 test('在线分期重试可复用提交 ID，两次独立的新消费即使内容相同也有各自 ID', async () => {
   const keys = []
   const client = createApiClient('https://ledger.example.invalid')

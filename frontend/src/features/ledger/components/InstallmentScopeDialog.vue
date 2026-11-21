@@ -58,7 +58,7 @@ function apply(voided: boolean, whole: boolean) {
   margin: auto; padding: 20px; border: 1px solid var(--line); border-radius: 15px;
   background: var(--surface); color: var(--ink); overflow-wrap: anywhere;
 }
-.scope-dialog::backdrop { background: #202e2766; }
+.scope-dialog::backdrop { background: var(--dialog-backdrop); }
 .scope-dialog h2 { font-size: 1.15rem; }
 .scope-section { display: grid; gap: 8px; padding-block: 14px; border-bottom: 1px solid var(--line); }
 .scope-section h3 { font-size: 1rem; }

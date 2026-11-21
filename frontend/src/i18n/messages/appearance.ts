@@ -1,0 +1,43 @@
+import { appearanceControlMessages } from './appearanceControls.ts'
+import { appearanceWizardMessages } from './appearanceWizard.ts'
+
+export const appearanceMessages = {
+  'zh-CN': {
+    ...appearanceControlMessages['zh-CN'],
+    ...appearanceWizardMessages['zh-CN'],
+    'settings.appearance.title': '外观',
+    'appearance.base.paper': '暖纸',
+    'appearance.base.tide': '海雾',
+    'appearance.base.night': '夜色',
+    'appearance.themes': '主题',
+    'appearance.myThemes': '我的主题',
+    'appearance.accentTitle': '主题色',
+    'appearance.backgroundTitle': '账本背景',
+    'appearance.create': '创建主题',
+    'appearance.preview': '账本示例',
+    'appearance.modified': '当前搭配已调整。创建主题后，可随时切换回这套搭配。',
+    'appearance.remove': '删除主题「{name}」',
+    'appearance.delete': '删除',
+    'appearance.askRemove': '删除「{name}」？',
+    'appearance.storageError': '未能保存本次更改。请检查设备存储空间后重试。',
+  },
+  'en-US': {
+    ...appearanceControlMessages['en-US'],
+    ...appearanceWizardMessages['en-US'],
+    'settings.appearance.title': 'Appearance',
+    'appearance.base.paper': 'Warm Paper',
+    'appearance.base.tide': 'Sea Mist',
+    'appearance.base.night': 'Nightfall',
+    'appearance.themes': 'Themes',
+    'appearance.myThemes': 'My themes',
+    'appearance.accentTitle': 'Accent color',
+    'appearance.backgroundTitle': 'Ledger background',
+    'appearance.create': 'Create theme',
+    'appearance.preview': 'Sample ledger',
+    'appearance.modified': 'You’ve adjusted this look. Create a theme to switch back to it later.',
+    'appearance.remove': 'Delete theme “{name}”',
+    'appearance.delete': 'Delete',
+    'appearance.askRemove': 'Delete “{name}”?',
+    'appearance.storageError': 'Couldn’t save this change. Check the available storage on this device and try again.',
+  },
+} as const

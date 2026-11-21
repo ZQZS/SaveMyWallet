@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "savemywallet.constant": {
+        "type": "Project"
+      },
+      "savemywallet.dto": {
+        "type": "Project"
+      }
+    }
+  }
+}

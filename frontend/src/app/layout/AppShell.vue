@@ -1,16 +1,38 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { Database, WalletCards } from 'lucide-vue-next'
 import MenuNav from './MenuNav.vue'
 import { useLedgerSession } from '../ledgerSession'
 import { useSyncSession } from '../syncSession'
+import { currentMonth } from '../../domain/ledger'
 import { t } from '../../i18n'
 
 const route = useRoute()
 const { status: syncStatus } = useSyncSession()
-const { data, busy, error, notice, needsReload, retryRead } = useLedgerSession()
-onMounted(retryRead)
+const { data, busy, error, notice, needsReload, retryRead, updateCalendarMonth } = useLedgerSession()
+let dayTimer: number
+
+function refreshCalendar() {
+  const now = new Date()
+  updateCalendarMonth(currentMonth(now), route.name === 'ledger' && !route.query.entry)
+  const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
+  window.clearTimeout(dayTimer)
+  dayTimer = window.setTimeout(refreshCalendar, midnight.getTime() - now.getTime())
+}
+
+onMounted(() => {
+  refreshCalendar()
+  window.addEventListener('focus', refreshCalendar)
+  document.addEventListener('visibilitychange', refreshCalendar)
+  void retryRead()
+})
+
+onUnmounted(() => {
+  window.clearTimeout(dayTimer)
+  window.removeEventListener('focus', refreshCalendar)
+  document.removeEventListener('visibilitychange', refreshCalendar)
+})
 </script>
 
 <template>
@@ -46,12 +68,12 @@ onMounted(retryRead)
 .header-inner { display: flex; align-items: center; min-height: 66px; gap: clamp(24px, 4vw, 56px); }
 .brand, .local-label { display: flex; gap: 9px; align-items: center; white-space: nowrap; }
 .brand { color: var(--green); font-size: 21px; letter-spacing: -.055em; }
-.brand-mark { display: grid; place-items: center; width: 33px; height: 33px; border-radius: 10px; background: var(--green); color: #fffdf2; }
+.brand-mark { display: grid; place-items: center; width: 33px; height: 33px; border-radius: 10px; background: var(--accent-solid); color: var(--on-accent); }
 .local-label { margin-left: auto; color: var(--sub); font-size: 13px; }
 .workspace { padding-block: clamp(20px, 3vw, 40px); }
 .alert { display: flex; gap: 10px; align-items: center; justify-content: space-between; margin: 0 0 16px; padding: 12px 15px; border-radius: 10px; font-size: 14px; overflow-wrap: anywhere; }
-.error-alert { color: #773326; background: #fbece6; }
-.sync-alert { color: #6f4b1f; background: #fbefdc; }
+.error-alert { color: var(--danger-ink); background: var(--danger-bg); }
+.sync-alert { color: var(--warning-ink); background: var(--warning-bg); }
 .sync-alert a { color: inherit; font-weight: 600; }
 .alert button { flex-shrink: 0; border: 1px solid currentColor; border-radius: 7px; background: transparent; color: inherit; padding: 5px 10px; }
 .saved-alert { color: var(--green); background: var(--soft); }

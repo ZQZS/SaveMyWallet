@@ -119,6 +119,7 @@ onBeforeRouteLeave(() => action.value !== 'save' && action.value !== 'remove')
         <li>{{ t('aiSettings.scenario') }}</li>
         <li>{{ t('aiSettings.notice') }}</li>
         <li>{{ t('aiSettings.search') }}</li>
+        <li>{{ t('aiSettings.spending') }}</li>
       </ul>
       <p class="settings-muted">{{ t('aiSettings.billing') }}</p>
     </section>

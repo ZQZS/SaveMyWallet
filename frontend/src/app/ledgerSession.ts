@@ -1,28 +1,29 @@
-import { inject, ref, shallowRef, type InjectionKey } from 'vue'
+import { computed, inject, ref, shallowRef, type InjectionKey } from 'vue'
 import type { LedgerRepository } from '../data/repository'
-import { currentMonth, isMonth, type LedgerData, type summarize } from '../domain/ledger.ts'
-import { displayError, t } from '../i18n/index.ts'
+import { currentMonth, isMonth, projectBillingMonths, summarizePlatforms, type LedgerData, type summarize } from '../domain/ledger.ts'
+import { displayError, formatMoney, t } from '../i18n/index.ts'
 
 interface LedgerServices {
   repository: LedgerRepository
   calculateMonth: typeof summarize
 }
 
-interface PaymentChange {
-  month: string
-  ids: string[]
-  paid: boolean
-}
+type PaymentScope = { month: string; platformId?: never } | { platformId: string; month?: never }
+type PaymentChange = PaymentScope & { ids: string[]; paid: boolean }
 
 export function createLedgerSession({ repository, calculateMonth }: LedgerServices) {
-  const data = shallowRef<LedgerData | null>(null)
-  const month = ref(currentMonth())
+  const snapshot = shallowRef<LedgerData | null>(null)
+  const calendarMonth = ref(currentMonth())
+  const data = computed(() => snapshot.value && projectBillingMonths(snapshot.value, calendarMonth.value))
+  const platformSummaries = computed(() => data.value ? summarizePlatforms(data.value) : null)
+  const month = ref(calendarMonth.value)
   const busy = ref(false)
   const needsReload = ref(false)
   const writeCount = ref(0)
   const error = ref('')
   const notice = ref('')
   const lastPayment = ref<PaymentChange | null>(null)
+  let pendingPayment: { signature: string; operationId: string; ids: string[] } | undefined
   let afterRefresh: (() => void) | undefined
 
   function selectMonth(value: string) {
@@ -32,9 +33,16 @@ export function createLedgerSession({ repository, calculateMonth }: LedgerServic
     notice.value = ''
   }
 
+  function updateCalendarMonth(value: string, followCurrentMonth: boolean) {
+    if (value === calendarMonth.value || !isMonth(value)) return
+    const wasCurrent = month.value === calendarMonth.value
+    calendarMonth.value = value
+    if (followCurrentMonth && wasCurrent && !busy.value && !needsReload.value) selectMonth(value)
+  }
+
   async function readSnapshot() {
     try {
-      data.value = await repository.load()
+      snapshot.value = await repository.load()
       needsReload.value = false
       error.value = ''
     } catch (cause) {
@@ -73,7 +81,49 @@ export function createLedgerSession({ repository, calculateMonth }: LedgerServic
     await readSnapshot()
   }
 
-  return { repository, calculateMonth, data, month, busy, needsReload, writeCount, error, notice, lastPayment, selectMonth, retryRead, commit }
+  function markPayments(ids: string[], paid: boolean, scope: PaymentScope, onSaved?: (changedIds: string[]) => void) {
+    return commit(() => {
+      const signature = JSON.stringify([scope.month, scope.platformId, paid, [...new Set(ids)].sort()])
+      if (pendingPayment?.signature !== signature) {
+        pendingPayment = { signature, operationId: crypto.randomUUID(), ids: [...ids] }
+      }
+      // REST fingerprints the request body as well as the key, including the original ID order.
+      return repository.setPayment(pendingPayment.ids, paid, pendingPayment.operationId)
+    }, changed => {
+      pendingPayment = undefined
+      if (changed.length) {
+        lastPayment.value = { ...scope, ids: changed, paid }
+        const changedIds = new Set(changed)
+        const amount = data.value!.entries.reduce((sum, entry) => sum + (changedIds.has(entry.id) ? entry.amountCents : 0), 0)
+        notice.value = t(paid ? 'ledger.markedPaid' : 'ledger.markedDue', { count: changed.length, amount: formatMoney(amount) })
+      } else {
+        notice.value = t('ledger.updated')
+      }
+      onSaved?.(changed)
+    })
+  }
+
+  function undoPayment() {
+    const action = lastPayment.value
+    if (!action) return
+    return commit(() => repository.undoPayment
+      ? repository.undoPayment(action.ids, !action.paid)
+      : repository.setPayment(action.ids, !action.paid), changed => {
+      lastPayment.value = null
+      notice.value = t(changed.length ? 'ledger.paymentUndone' : 'ledger.updated')
+    })
+  }
+
+  function invalidatePaymentUndo(changed: string[]) {
+    const payment = lastPayment.value
+    if (!payment || !changed.length) return
+    const changedIds = new Set(changed)
+    const ids = payment.ids.filter(id => !changedIds.has(id))
+    if (ids.length !== payment.ids.length) lastPayment.value = ids.length ? { ...payment, ids } : null
+  }
+
+  return { repository, calculateMonth, data, platformSummaries, calendarMonth, month, busy, needsReload, writeCount,
+    error, notice, lastPayment, selectMonth, updateCalendarMonth, retryRead, commit, markPayments, undoPayment, invalidatePaymentUndo }
 }
 
 export type LedgerSession = ReturnType<typeof createLedgerSession>
