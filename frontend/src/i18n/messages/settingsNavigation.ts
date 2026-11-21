@@ -11,8 +11,6 @@ export const settingsNavigationMessages = {
     'settings.pets.title': '桌宠',
     'settings.connections.title': '跨设备同步',
     'settings.language.display': '显示语言',
-    'settings.planned': '规划中',
-    'settings.plan.pets': '后续版本将在这里选择角色、设置互动和提醒方式。安卓将先支持应用内桌宠。',
   },
   'en-US': {
     'settings.title': 'Settings',
@@ -26,7 +24,5 @@ export const settingsNavigationMessages = {
     'settings.pets.title': 'Desktop pet',
     'settings.connections.title': 'Device sync',
     'settings.language.display': 'Display language',
-    'settings.planned': 'Planned',
-    'settings.plan.pets': 'A future version will let you choose a pet and configure interactions and reminders. On Android, the pet will first appear inside the app.',
   },
 } as const

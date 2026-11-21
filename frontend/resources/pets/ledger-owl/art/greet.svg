@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96" role="img" aria-labelledby="title">
+  <title id="title">账房鸮从账簿前抬起头来，举翅致意</title>
+  <g stroke="#294334" stroke-width="3.5" stroke-linejoin="round" stroke-linecap="round">
+    <path fill="#93aeb2" d="M66 55q10-3 16-18 2-5 5-1 6 13-3 24-4 6-13 8z"/>
+    <path fill="#93aeb2" d="M18 51q0-12 5-21l-2-13q0-3 3-1l14 9q10-3 20 0l13-9q3-2 3 1l-2 14q6 9 6 21v9q0 19-29 19-31 0-31-20z"/>
+    <path fill="#c4d3ca" stroke="none" d="M29 58q7-7 19-7t20 7v10q-3 10-20 10T29 67z"/>
+    <g fill="#f8e6bc">
+      <circle cx="35" cy="42" r="11.5"/>
+      <circle cx="61" cy="42" r="11.5"/>
+    </g>
+    <path fill="none" d="M46.5 41.5h3M20 39l4 1m48 0 4-1m-46 3q5-6 10 0m16 0q5-6 10 0"/>
+    <path fill="#e4ab59" stroke-width="2.5" d="m44 50 4 6 4-6q-4-3-8 0z"/>
+    <g transform="rotate(-8 44 72)">
+      <path fill="#628678" d="M28 61q9-1 17 3 9-4 18-3v17q-10 0-18 4-9-4-17-4z"/>
+      <path fill="none" stroke="#e9d9b0" stroke-width="2" d="m33 66 7 1.5m-7 4 5 1m13-5 7-1.5"/>
+      <path fill="none" stroke-width="2.5" d="M45 65v15"/>
+    </g>
+    <path fill="#93aeb2" d="M19 57q6-2 14 8 3 5-1 7-7 1-12-7"/>
+  </g>
+</svg>

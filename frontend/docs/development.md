@@ -2,7 +2,7 @@
 
 SaveMyWallet 面向在多个平台分期消费、预订商品或有临时还款的人。用户按还款月份查看各平台应付金额，核对已经还过的款项，并在发薪前估算扣掉下月还款能剩多少钱。这里的「预计结余」只考虑已录入的工资与还款计划。
 
-Windows 和安卓共用 Vue、TypeScript、Tauri 2 和 Rust 代码，每台设备使用各自的 SQLite 账本。本地录入、动态平台、月度汇总、还款勾选、工资覆盖和结余预警都可离线使用。系统设置提供语言切换、手动备份恢复、账本重置、跨设备同步和 DeepSeek 密钥管理。月度解释、截图草稿和分期试算见助手说明，桌宠仍在规划中。[AI 助手](ai-features.md) · [路线图](roadmap.md) · [AI 协作者指南](../AGENTS.md) · [同步协议](../../backend/docs/sync.md)
+Windows 和安卓共用 Vue、TypeScript、Tauri 2 和 Rust 代码，每台设备使用各自的 SQLite 账本。本地录入、动态平台、月度汇总、还款勾选、工资覆盖和结余预警都可离线使用。系统设置提供语言切换、手动备份恢复、账本重置、跨设备同步和 DeepSeek 密钥管理。在桌宠设置中可开启应用内角色或导入酒馆角色卡。[桌宠与角色卡](pets.md) · [AI 助手](ai-features.md) · [路线图](roadmap.md) · [AI 协作者指南](../AGENTS.md) · [同步协议](../../backend/docs/sync.md)
 
 ## 一笔账如何影响月度清单
 
@@ -39,7 +39,7 @@ Windows 和安卓共用 Vue、TypeScript、Tauri 2 和 Rust 代码，每台设�
 | `scripts/collectors/` | 独立数据采集脚本、来源契约与本地样例，输出带外部编号和平台名称的待审核草稿。 |
 | `src-tauri/src/` | `lib.rs` 注册命令并管理连接。`ledger.rs` 验证、查询、写事务。`schema_v1.sql` 定义首版表结构。 |
 | `src-tauri/gen/android/`、`src-tauri/capabilities/`、`src-tauri/icons/` | 安卓 Gradle 工程、Tauri 权限与打包图标。两端共用的账务逻辑位于 `src/` 和 Rust 模块。 |
-| `src/features/pets/`、`resources/pets/` | 桌宠契约及资源包，后续供展示层加载。开发样例、资源规范和跨平台呈现见[桌宠开发说明](pets.md)。 |
+| `src/features/pets/`、`resources/pets/` | 内置角色图包和台词、选择与展示组件、酒馆角色卡解析及本机存储。详见[桌宠与角色卡](pets.md)。 |
 | `src/integrations/ai/`、`src-tauri/src/ai/`、`resources/ai/` | 分别提供前端调用与字段校验、设备凭据与 DeepSeek 请求、提示词与合成验收样本。[数据流与截图审核](ai-features.md) |
 | `tests/`、`src-tauri/src/ledger/tests.rs` | 前端业务、会话和扩展契约回归。原生 SQLite 写入、重开和事务回归。 |
 | `docs/`、`dist/`、`src-tauri/target/`、`release/` | 项目文档、Vite 构建结果、Cargo 构建结果和供安装的交付物。修改功能时编辑源目录，再生成对应产物。 |

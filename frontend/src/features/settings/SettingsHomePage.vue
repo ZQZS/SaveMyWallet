@@ -2,6 +2,9 @@
 import { Archive, Bot, Cable, ChevronRight, Languages, PawPrint, RotateCcw } from 'lucide-vue-next'
 import { RouterLink } from 'vue-router'
 import { languageOptions, locale, t } from '../../i18n'
+import { usePets } from '../pets/usePets'
+
+const { enabled, activePet, ready } = usePets()
 
 const sections = [
   { key: 'general', links: [{ name: 'settings-language', key: 'language', icon: Languages }] },
@@ -29,7 +32,7 @@ const sections = [
             <span class="item-title">{{ t('settings.' + link.key + '.title') }}</span>
             <span v-if="link.key === 'language'" class="item-meta">{{ languageOptions.find(option => option.value === locale)?.label }}</span>
             <span v-else-if="link.key === 'ai'" class="item-meta">DeepSeek</span>
-            <span v-else-if="link.key === 'pets'" class="item-meta">{{ t('settings.planned') }}</span>
+            <span v-else-if="link.key === 'pets' && ready" class="item-meta pet-name">{{ enabled ? activePet.name : t('pets.picker.off') }}</span>
             <ChevronRight class="item-arrow" :size="17" aria-hidden="true" />
           </RouterLink>
         </li>
@@ -50,6 +53,7 @@ const sections = [
 .item-icon { flex: none; display: grid; place-items: center; width: 33px; height: 33px; color: var(--green); background: var(--soft); border-radius: 9px; }
 .item-title { flex: 1; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
 .item-meta { color: var(--sub); font-size: .8rem; }
+.pet-name { max-width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .item-arrow { flex: none; color: var(--sub); }
 @media (max-width: 450px) {
   .settings-link { gap: 8px; padding-inline: 10px; }

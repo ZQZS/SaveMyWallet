@@ -1,0 +1,24 @@
+{
+  "zh-CN": {
+    "name": "侦探狐",
+    "description": "好奇、爱追线索，总想知道下一页藏着什么。",
+    "greetings": [
+      "你来啦。今天从哪条线索查起？",
+      "放大镜擦亮了。咱们翻哪一页？",
+      "搭档，今天要一起查点什么？"
+    ],
+    "lowBalance": "这条线索值得看看。{month}的预计结余比警告线低 {amount}。",
+    "pendingEstimates": "翻到线索了。{month}有 {count} 笔预计补款待核对，从哪笔查起？"
+  },
+  "en-US": {
+    "name": "Detective Fox",
+    "description": "An inquisitive sleuth who follows each entry like a clue.",
+    "greetings": [
+      "Ah, my partner. Which lead do we follow today?",
+      "Magnifier polished. Which page looks interesting?",
+      "Have a case for me, partner?"
+    ],
+    "lowBalance": "A lead worth following: the projected balance for {month} is {amount} below the warning line.",
+    "pendingEstimates": "A lead for {month}! Estimated payments to investigate: {count}. Where shall we start?"
+  }
+}

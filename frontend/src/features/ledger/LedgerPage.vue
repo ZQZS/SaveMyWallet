@@ -10,6 +10,7 @@ import MonthSummary from './components/MonthSummary.vue'
 import NextMonthPreview from './components/NextMonthPreview.vue'
 import InstallmentScopeDialog from './components/InstallmentScopeDialog.vue'
 import MonthlyAssistant from '../ai/MonthlyAssistant.vue'
+import LedgerPet from '../pets/LedgerPet.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -32,6 +33,13 @@ async function openMonth(value: string) {
 const totals = computed(() => data.value && calculateMonth(data.value, month.value))
 const nextMonth = computed(() => month.value < MAX_MONTH ? shiftMonth(month.value, 1) : null)
 const nextTotals = computed(() => data.value && nextMonth.value ? calculateMonth(data.value, nextMonth.value) : null)
+const repaymentDetails = ref<HTMLElement | null>(null)
+
+function showRepaymentDetails() {
+  repaymentDetails.value?.focus({ preventScroll: true })
+  repaymentDetails.value?.scrollIntoView({ block: 'start' })
+}
+
 const selectedEntryId = ref<string | null>(null)
 const selectedPeriod = computed(() => selectedEntryId.value
   ? data.value?.entries.find(entry => entry.id === selectedEntryId.value && entry.month === month.value)
@@ -116,15 +124,20 @@ function applyVoided(entry: Entry, voided: boolean, whole: boolean) {
       </button>
     </div>
 
-    <MonthSummary :totals="totals" :floor="data.settings.warningFloorCents"
-      :has-override="data.salaryOverrides[month] !== undefined" :busy="busy"
-      @budget="router.push({ name: 'budget' })" />
+    <div class="summary-with-pet">
+      <MonthSummary :totals="totals" :floor="data.settings.warningFloorCents"
+        :has-override="data.salaryOverrides[month] !== undefined" :busy="busy"
+        @budget="router.push({ name: 'budget' })" />
+      <LedgerPet :month="month" :totals="totals" :floor="data.settings.warningFloorCents" @details="showRepaymentDetails" />
+    </div>
 
     <MonthlyAssistant :key="month" :month="month" :ledger="data" :summary="totals" />
 
     <p v-if="linkedId && !linkedEntry" class="notice" role="status">{{ t('ledger.linkedEntryMissing') }}</p>
-    <MonthlyLedger :key="month" :groups="totals.groups" :paid="totals.paid" :busy="busy" :linked-entry="linkedEntry"
-      @pay="markPayments" @set-voided="chooseVoidScope" @confirm="router.push({ name: 'bill-confirm', params: { id: $event.id } })" />
+    <div ref="repaymentDetails" tabindex="-1" class="repayment-details">
+      <MonthlyLedger :key="month" :groups="totals.groups" :paid="totals.paid" :busy="busy" :linked-entry="linkedEntry"
+        @pay="markPayments" @set-voided="chooseVoidScope" @confirm="router.push({ name: 'bill-confirm', params: { id: $event.id } })" />
+    </div>
 
     <InstallmentScopeDialog v-if="selectedPeriod" :entry="selectedPeriod" :periods="selectedPlan" :busy="busy"
       @apply="applyVoided" @dismiss="selectedEntryId = null" />
@@ -143,6 +156,9 @@ function applyVoided(entry: Entry, voided: boolean, whole: boolean) {
 
 <style scoped>
 .monthly-ledger { display: grid; min-width: 0; gap: 20px; color: var(--ink); }
+.summary-with-pet { min-width: 0; border-radius: 16px; background: var(--surface); }
+.repayment-details { border-radius: 15px; scroll-margin-top: 12px; }
+.repayment-details:focus-visible { outline: 3px solid #3b895e; outline-offset: 3px; }
 .monthly-ledger h1 { margin: 0; }
 .monthly-ledger button { font-family: inherit; cursor: pointer; }
 .monthly-ledger button:disabled { cursor: default; opacity: 0.55; }

@@ -1,0 +1,24 @@
+{
+  "zh-CN": {
+    "name": "钱包猫",
+    "description": "慢热、温和，喜欢挨着你一起翻账本。",
+    "greetings": [
+      "给你留了个位置。今天看哪一页？",
+      "坐一会儿吧。咱们慢慢看。",
+      "来啦？我把账本摊好了。"
+    ],
+    "lowBalance": "{month}的预计结余比警告线低 {amount}。咱们一起看看明细？",
+    "pendingEstimates": "{month}还有 {count} 笔预计补款。要一起核对吗？"
+  },
+  "en-US": {
+    "name": "Wallet Cat",
+    "description": "A gentle companion who saves you a seat by the ledger.",
+    "greetings": [
+      "Saved you a seat. Which page shall we look at?",
+      "Come sit with me. We can take our time.",
+      "There you are. I've got the ledger open."
+    ],
+    "lowBalance": "Our projected balance for {month} is {amount} below the warning line. Shall we look together?",
+    "pendingEstimates": "Still to check for {month}: {count} estimated payments. Shall we look together?"
+  }
+}

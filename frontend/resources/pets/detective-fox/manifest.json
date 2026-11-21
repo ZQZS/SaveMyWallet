@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "id": "detective-fox",
+  "displayName": "侦探狐",
+  "artworkSource": "SaveMyWallet 项目原创",
+  "states": {
+    "idle": "art/idle.svg",
+    "greet": "art/greet.svg"
+  }
+}

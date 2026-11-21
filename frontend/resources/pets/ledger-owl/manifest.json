@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "id": "ledger-owl",
+  "displayName": "账房鸮",
+  "artworkSource": "SaveMyWallet 项目原创 SVG",
+  "states": {
+    "idle": "art/idle.svg",
+    "greet": "art/greet.svg"
+  }
+}

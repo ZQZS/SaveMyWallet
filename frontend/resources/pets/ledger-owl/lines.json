@@ -1,0 +1,24 @@
+{
+  "zh-CN": {
+    "name": "账房鸮",
+    "description": "干练、惜字如金，说起账来总把数字放前头。",
+    "greetings": [
+      "在。看哪月？",
+      "账簿已摊开。请讲。",
+      "眼镜戴好了。开工。"
+    ],
+    "lowBalance": "{month}预计结余低于警告线 {amount}。",
+    "pendingEstimates": "{count} 笔预计补款待核对。归属月份：{month}。"
+  },
+  "en-US": {
+    "name": "Ledger Owl",
+    "description": "A concise bookkeeper. Figures first.",
+    "greetings": [
+      "Present. Which month?",
+      "Ledger open. Go ahead.",
+      "Spectacles on. Ready."
+    ],
+    "lowBalance": "{month}: projected balance {amount} below the warning line.",
+    "pendingEstimates": "{month} · Estimated payments pending review: {count}."
+  }
+}
