@@ -22,6 +22,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/platforms/:id', name: 'platform-details', component: () => import('../features/platforms/PlatformDetailsPage.vue'), props: true, meta: { menu: 'platforms' } },
   { path: '/statistics', name: 'statistics', component: () => import('../features/statistics/StatisticsPage.vue'), meta: { menu: 'statistics' } },
   { path: '/budget', name: 'budget', component: BudgetPage, meta: { menu: 'budget' } },
+  { path: '/chat', name: 'chat', component: () => import('../features/ai/ChatPage.vue'), meta: { menu: 'chat' } },
   { path: '/settings', meta: { menu: 'settings' }, children: settingsRoutes },
   { path: '/:pathMatch(.*)*', redirect: { name: 'ledger' } },
 ]

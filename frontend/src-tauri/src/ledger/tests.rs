@@ -604,7 +604,7 @@ fn ambiguous_or_incomplete_legacy_schedules_and_inconsistent_series_are_never_vo
     add_three_period_purchase(&mut db, &platform, "2026-12");
     let first = snapshot(&mut db).unwrap().entries;
     let assert_refused = |db: &mut Connection| {
-        let error = set_installment_voided(db, &first[0].id, true).unwrap_err();
+        let error = set_installment_voided(&*db, &first[0].id, true).unwrap_err();
         assert_eq!(error.to_string(), "INSTALLMENT_GROUP_UNAVAILABLE");
         assert!(snapshot(db).unwrap().entries.iter().all(|e| !e.voided));
     };

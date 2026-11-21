@@ -5,8 +5,27 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
 const INTERACTION: &str = include_str!("../../../resources/ai/prompts/interaction.md");
+const SHARED_LEDGER: &str = include_str!("../../../resources/ai/prompts/chat-ledger.md");
+const LEDGER_ACTIONS: &str = include_str!("../../../resources/ai/prompts/chat-actions.md");
+const GENERAL_CHAT: &str = "你是 SaveMyWallet 中的通用聊天助手。根据用户的问题自然地闲聊、解释、写作或协助完成其他话题。应用将用户本轮的文字放在最后一条用户消息的 JSON 字段 message 中。账本数据仅在用户主动分享时可用。";
 const MAX_REPLY_CHARS: usize = 2000;
 const INVALID_INPUT: &str = "AI_INVALID_INPUT";
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum ChatMode {
+    Pet,
+    General,
+}
+
+impl ChatMode {
+    fn max_reply_chars(self) -> usize {
+        match self {
+            Self::Pet => MAX_REPLY_CHARS,
+            Self::General => 12000,
+        }
+    }
+}
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -40,6 +59,8 @@ struct ChatEntry {
     kind: String,
     status: String,
     amount_cents: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    voided: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     deposit_cents: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -102,15 +123,41 @@ fn provider_messages(
     facts: Option<&ReminderFacts>,
     details: Option<&ChatMonthDetails>,
 ) -> Result<Vec<Value>, String> {
+    chat_messages(
+        ChatMode::Pet,
+        Some(character),
+        messages,
+        language,
+        facts,
+        details,
+        false,
+    )
+}
+
+fn chat_messages(
+    mode: ChatMode,
+    character: Option<&ChatCharacter>,
+    messages: &[ChatMessage],
+    language: &str,
+    facts: Option<&ReminderFacts>,
+    details: Option<&ChatMonthDetails>,
+    actions_enabled: bool,
+) -> Result<Vec<Value>, String> {
+    let prompt = match (mode, character) {
+        (ChatMode::Pet, Some(_)) => INTERACTION,
+        (ChatMode::General, None) => GENERAL_CHAT,
+        _ => return Err(INVALID_INPUT.into()),
+    };
     if !matches!(language, "zh-CN" | "en-US")
-        || character.name.trim().is_empty()
-        || character.name.chars().count() > 128
-        || character.description.chars().count() > 2000
-        || character.voice_sample.chars().count() > 500
-        || character
-            .opening
-            .as_ref()
-            .is_some_and(|line| line.chars().count() > 1000)
+        || character.is_some_and(|c| {
+            c.name.trim().is_empty()
+                || c.name.chars().count() > 128
+                || c.description.chars().count() > 2000
+                || c.voice_sample.chars().count() > 500
+                || c.opening
+                    .as_ref()
+                    .is_some_and(|line| line.chars().count() > 1000)
+        })
         || facts.is_some_and(|facts| !facts.is_valid())
         || details.is_some_and(|details| !details.is_valid_for(facts))
         || !(1..=11).contains(&messages.len())
@@ -119,13 +166,16 @@ fn provider_messages(
         return Err(INVALID_INPUT.into());
     }
 
-    let system = format!("{INTERACTION}\n回复语言 / Response language: {language}");
+    let ledger_context = if facts.is_some() { SHARED_LEDGER } else { "" };
+    let actions = if actions_enabled { LEDGER_ACTIONS } else { "" };
+    let system =
+        format!("{prompt}\n{ledger_context}\n{actions}\n回复语言 / Response language: {language}");
     let mut turns = vec![json!({"role":"system", "content":system})];
     for (index, message) in messages.iter().enumerate() {
         let (role, limit) = if index % 2 == 0 {
             (Role::User, 1000)
         } else {
-            (Role::Assistant, MAX_REPLY_CHARS)
+            (Role::Assistant, mode.max_reply_chars())
         };
         let text = message.content.trim();
         if message.role != role || !(1..=limit).contains(&text.chars().count()) {
@@ -133,16 +183,19 @@ fn provider_messages(
         }
         if index + 1 == messages.len() {
             // Card text stays in user content. Only the app controls the system message.
-            let mut profile = json!({"name":character.name, "description":character.description, "voiceSample":character.voice_sample});
-            if let Some(opening) = character
-                .opening
-                .as_deref()
-                .map(str::trim)
-                .filter(|line| !line.is_empty() && *line != character.voice_sample.trim())
-            {
-                profile["opening"] = json!(opening);
+            let mut input = json!({"message":text});
+            if let Some(character) = character {
+                let mut profile = json!({"name":character.name, "description":character.description, "voiceSample":character.voice_sample});
+                if let Some(opening) = character
+                    .opening
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty() && *line != character.voice_sample.trim())
+                {
+                    profile["opening"] = json!(opening);
+                }
+                input["character"] = profile;
             }
-            let mut input = json!({"message":text, "character":profile});
             if let Some(facts) = facts {
                 input["facts"] = json!(facts);
             }
@@ -156,6 +209,8 @@ fn provider_messages(
     }
     Ok(turns)
 }
+
+pub(crate) mod agent;
 
 #[tauri::command]
 pub(crate) async fn ai_pet_chat(

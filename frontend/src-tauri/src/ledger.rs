@@ -8,8 +8,10 @@ const LAST_MONTH: u32 = 2099 * 12 + 11;
 
 pub mod backup;
 mod installments;
+pub(crate) mod review;
 pub mod sync;
 pub use installments::set_installment_voided;
+use review::LedgerWrite;
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -316,9 +318,9 @@ pub(crate) fn platform_name(name: &str) -> StorageResult<&str> {
     Ok(name)
 }
 
-pub fn add_platform(conn: &Connection, name: &str) -> StorageResult<String> {
+pub fn add_platform<'a>(write: impl Into<LedgerWrite<'a>>, name: &str) -> StorageResult<String> {
     let name = platform_name(name)?;
-    let tx = conn.unchecked_transaction()?;
+    let tx = write.into().begin(TransactionBehavior::Deferred)?;
     let id: String = tx
         .query_row(
             "INSERT INTO platforms (id,name) VALUES(
@@ -335,15 +337,15 @@ pub fn add_platform(conn: &Connection, name: &str) -> StorageResult<String> {
     Ok(id)
 }
 
-pub fn add_bill(conn: &mut Connection, input: BillInput) -> StorageResult<()> {
-    add_bills(conn, &[input])
+pub fn add_bill<'a>(write: impl Into<LedgerWrite<'a>>, input: BillInput) -> StorageResult<()> {
+    add_bills(write, &[input])
 }
 
-pub fn add_bills(conn: &mut Connection, inputs: &[BillInput]) -> StorageResult<()> {
+pub fn add_bills<'a>(write: impl Into<LedgerWrite<'a>>, inputs: &[BillInput]) -> StorageResult<()> {
     if inputs.is_empty() {
         return Err("BILL_BATCH_EMPTY".into());
     }
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let tx = write.into().begin(TransactionBehavior::Immediate)?;
     for input in inputs {
         insert_bill(&tx, input)?;
     }
@@ -424,10 +426,10 @@ fn insert_bill(tx: &Transaction<'_>, input: &BillInput) -> StorageResult<()> {
     Ok(())
 }
 
-pub fn confirm(conn: &Connection, input: ConfirmInput) -> StorageResult<()> {
+pub fn confirm<'a>(write: impl Into<LedgerWrite<'a>>, input: ConfirmInput) -> StorageResult<()> {
     let title = bill_title(&input.title)?;
     month_index(&input.month)?;
-    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+    let tx = write.into().begin(TransactionBehavior::Immediate)?;
     let saved_deposit: i64 = tx.query_row(
         "SELECT deposit_cents FROM entries WHERE id = ? AND status = 'estimated' AND voided = 0",
         [&input.id], |row| row.get(0),
@@ -467,40 +469,44 @@ fn change_voided(tx: &Transaction<'_>, ids: &[String], voided: bool) -> StorageR
     Ok(changed)
 }
 
-pub fn set_entry_voided(conn: &mut Connection, id: &str, voided: bool) -> StorageResult<()> {
-    set_entries_voided(conn, &[id.to_owned()], voided)?;
+pub fn set_entry_voided<'a>(
+    write: impl Into<LedgerWrite<'a>>,
+    id: &str,
+    voided: bool,
+) -> StorageResult<()> {
+    set_entries_voided(write, &[id.to_owned()], voided)?;
     Ok(())
 }
 
-pub fn set_entries_voided(
-    conn: &mut Connection,
+pub fn set_entries_voided<'a>(
+    write: impl Into<LedgerWrite<'a>>,
     ids: &[String],
     voided: bool,
 ) -> StorageResult<Vec<String>> {
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let tx = write.into().begin(TransactionBehavior::Immediate)?;
     let changed = change_voided(&tx, ids, voided)?;
     tx.commit()?;
     Ok(changed)
 }
 
-pub fn mark_payment(
-    conn: &mut Connection,
+pub fn mark_payment<'a>(
+    write: impl Into<LedgerWrite<'a>>,
     ids: &[String],
     paid: bool,
 ) -> StorageResult<Vec<String>> {
-    change_payment(conn, ids, paid, false)
+    change_payment(write.into(), ids, paid, false)
 }
 
-pub fn undo_payment(
-    conn: &mut Connection,
+pub fn undo_payment<'a>(
+    write: impl Into<LedgerWrite<'a>>,
     ids: &[String],
     paid: bool,
 ) -> StorageResult<Vec<String>> {
-    change_payment(conn, ids, paid, true)
+    change_payment(write.into(), ids, paid, true)
 }
 
 fn change_payment(
-    conn: &mut Connection,
+    write: LedgerWrite<'_>,
     ids: &[String],
     paid: bool,
     undo: bool,
@@ -510,7 +516,7 @@ fn change_payment(
     } else {
         ("paid", "due")
     };
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let tx = write.begin(TransactionBehavior::Immediate)?;
     let guarded = undo && sync::bound(&tx)?;
     let mut changed = Vec::new();
     {
@@ -546,14 +552,14 @@ fn change_payment(
     Ok(changed)
 }
 
-pub fn budget(conn: &mut Connection, input: BudgetInput) -> StorageResult<()> {
+pub fn budget<'a>(write: impl Into<LedgerWrite<'a>>, input: BudgetInput) -> StorageResult<()> {
     month_index(&input.month)?;
     check_amount(input.default_salary_cents, 0)?;
     check_amount(input.warning_floor_cents, 0)?;
     if let Some(amount) = input.override_salary_cents {
         check_amount(amount, 0)?;
     }
-    let tx = conn.transaction()?;
+    let tx = write.into().begin(TransactionBehavior::Deferred)?;
     tx.execute(
         "UPDATE settings SET default_salary_cents = ?1, warning_floor_cents = ?2 WHERE id = 1",
         params![input.default_salary_cents, input.warning_floor_cents],

@@ -1,5 +1,9 @@
 export const ledgerMessages = {
   'zh-CN': {
+    'ledger.actionRows': '请选择当前月份中适用于此操作的账单，并核对明细序号。',
+    'ledger.actionStale': '账本或撤销记录已变化，请重新查看账单并发起操作。',
+    'ledger.actionBusy': '请等当前账本操作完成，或先重新读取账本。',
+    'ledger.actionUndoRows': '撤销需要勾选上一次还款操作仍可撤销的全部账单。',
     'ledger.monthNavigation': '切换月份',
     'ledger.previousMonth': '上个月',
     'ledger.currentMonth': '本月',
@@ -78,6 +82,10 @@ export const ledgerMessages = {
     'error.INSTALLMENT_GROUP_UNAVAILABLE': '无法确定这笔分期的完整期次，请逐期操作。',
   },
   'en-US': {
+    'ledger.actionRows': 'Choose eligible bills from this month and check their selection numbers.',
+    'ledger.actionStale': 'The ledger or undo history changed. Review the bills and request the action again.',
+    'ledger.actionBusy': 'Wait for the current ledger operation to finish or reload the ledger first.',
+    'ledger.actionUndoRows': 'Select every bill still eligible for undo from the last payment change.',
     'ledger.monthNavigation': 'Change month',
     'ledger.previousMonth': 'Previous month',
     'ledger.currentMonth': 'This month',

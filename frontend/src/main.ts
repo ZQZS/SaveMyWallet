@@ -20,7 +20,8 @@ const session = createLedgerSession({ repository: sqliteRepository, calculateMon
 const router = createAppRouter(session)
 const canRefresh = () => {
   const route = router.currentRoute.value
-  return route.name === 'ledger' || route.name === 'statistics' || route.meta.menu === 'platforms' || route.meta.menu === 'settings'
+  return route.name === 'ledger' || route.name === 'chat' || route.name === 'statistics'
+    || route.meta.menu === 'platforms' || route.meta.menu === 'settings'
 }
 const sync = createSyncSession(invoke, session, canRefresh)
 const app = createApp(App)

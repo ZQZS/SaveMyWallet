@@ -9,7 +9,7 @@ import { ArrowDown, MessageCircle, Repeat2, X } from 'lucide-vue-next'
 import type { MonthlySummary } from '../../domain/ledger'
 import { formatMoney, formatMonth, locale, t } from '../../i18n'
 import PetPickerDialog from './PetPickerDialog.vue'
-import PetChatDialog from './PetChatDialog.vue'
+import ChatWindow from '../ai/ChatWindow.vue'
 import { usePets } from './usePets'
 
 const props = defineProps<{ month: string; totals: MonthlySummary; floor: number }>()
@@ -112,7 +112,7 @@ function dismiss() {
       </button>
     </div>
     <PetPickerDialog v-if="pickerOpen" @close="pickerOpen = false" />
-    <PetChatDialog v-if="chatOpen" :key="JSON.stringify([activePet.id, month])" :pet="activePet" :month="month"
+    <ChatWindow v-if="chatOpen" :key="JSON.stringify([activePet.id, month])" :pet="activePet" :month="month"
       :totals="totals" :floor="floor" @close="chatOpen = false" />
   </aside>
 </template>

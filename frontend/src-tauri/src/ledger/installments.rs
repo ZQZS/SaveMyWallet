@@ -1,12 +1,12 @@
-use super::{change_voided, StorageResult};
+use super::{change_voided, LedgerWrite, StorageResult};
 use rusqlite::{Connection, TransactionBehavior};
 
-pub fn set_installment_voided(
-    conn: &mut Connection,
+pub fn set_installment_voided<'a>(
+    write: impl Into<LedgerWrite<'a>>,
     id: &str,
     voided: bool,
 ) -> StorageResult<Vec<String>> {
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let tx = write.into().begin(TransactionBehavior::Immediate)?;
     let members = installment_members(&tx, id)?;
     let changed = change_voided(&tx, &members, voided)?;
     tx.commit()?;

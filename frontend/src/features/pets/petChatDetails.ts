@@ -1,6 +1,6 @@
 import type { Entry, MonthlySummary } from '../../domain/ledger.ts'
 
-type DetailFields = Pick<Entry, 'title' | 'kind' | 'status' | 'amountCents' | 'depositCents'>
+type DetailFields = Pick<Entry, 'title' | 'kind' | 'status' | 'amountCents' | 'depositCents' | 'voided'>
 
 export interface PetChatDetail extends DetailFields {
   platform: string
@@ -22,6 +22,7 @@ export interface PetChatDetailOption {
 function projectDetail(platform: string, entry: DetailFields & Partial<Pick<Entry, 'installmentIndex' | 'installmentCount'>>): PetChatDetail {
   const { title, kind, status, amountCents } = entry
   const detail: PetChatDetail = { platform, title, kind, status, amountCents }
+  if (entry.voided) detail.voided = true
   if (kind === 'estimate') detail.depositCents = entry.depositCents ?? 0
   if (kind === 'installment') {
     if (entry.installmentIndex != null) detail.installmentIndex = entry.installmentIndex
@@ -30,11 +31,11 @@ function projectDetail(platform: string, entry: DetailFields & Partial<Pick<Entr
   return detail
 }
 
-export function petChatDetailOptions(month: string, summary: Pick<MonthlySummary, 'groups'>): PetChatDetailOption[] {
+export function petChatDetailOptions(month: string, summary: Pick<MonthlySummary, 'groups'>, includeVoided = false): PetChatDetailOption[] {
   const options: PetChatDetailOption[] = []
   for (const { platform, entries } of summary.groups) {
     for (const entry of entries) {
-      if (entry.month === month && !entry.voided) {
+      if (entry.month === month && (includeVoided || !entry.voided)) {
         options.push({ id: entry.id, month, detail: projectDetail(platform.name, entry) })
       }
     }
@@ -47,7 +48,12 @@ export function petChatDetailsPayload({ month, entries }: PetChatDetails): PetCh
   return { month, entries: entries.map(entry => projectDetail(entry.platform, entry)) }
 }
 
+// Tool row numbers index this send's selected options in display order.
+export function selectedPetChatOptions(month: string, options: readonly PetChatDetailOption[], selectedIds: ReadonlySet<string>): PetChatDetailOption[] {
+  return options.filter(option => option.month === month && selectedIds.has(option.id))
+}
+
 export function selectedPetChatDetails(month: string, options: readonly PetChatDetailOption[], selectedIds: ReadonlySet<string>): PetChatDetails {
-  const entries = options.filter(option => option.month === month && selectedIds.has(option.id)).map(option => option.detail)
+  const entries = selectedPetChatOptions(month, options, selectedIds).map(option => option.detail)
   return petChatDetailsPayload({ month, entries })
 }

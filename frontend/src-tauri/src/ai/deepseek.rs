@@ -120,9 +120,17 @@ impl DeepSeek {
             max_tokens,
             messages,
         };
-        let request = self.http.post(format!("{}/chat/completions", self.origin));
-        let result = response_json(request.bearer_auth(key).json(&body)).await?;
+        let result = self.post_completion(key, &body).await?;
         Ok(completion_content(&result)?.to_owned())
+    }
+
+    pub(super) async fn post_completion(
+        &self,
+        key: &str,
+        body: &impl Serialize,
+    ) -> Result<Value, String> {
+        let request = self.http.post(format!("{}/chat/completions", self.origin));
+        response_json(request.bearer_auth(key).json(body)).await
     }
 }
 

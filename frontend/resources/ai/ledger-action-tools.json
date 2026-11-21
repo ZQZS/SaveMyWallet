@@ -1,0 +1,110 @@
+[
+  {
+    "name": "mark_bills_paid",
+    "description": "Mark the selected confirmed unpaid bills as paid in the ledger. Use the 1-based row numbers from inspect_selected_bills. The user reviews the changes.",
+    "requiresSelection": true,
+    "parameters": {
+      "type": "object", "additionalProperties": false, "required": ["rows"],
+      "properties": { "rows": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "minItems": 1, "uniqueItems": true } }
+    }
+  },
+  {
+    "name": "mark_bills_unpaid",
+    "description": "Mark specified paid bills as unpaid again. Use 1-based selected row numbers. To undo the last recorded payment, use undo_last_payment.",
+    "requiresSelection": true,
+    "parameters": {
+      "type": "object", "additionalProperties": false, "required": ["rows"],
+      "properties": { "rows": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "minItems": 1, "uniqueItems": true } }
+    }
+  },
+  {
+    "name": "undo_last_payment",
+    "description": "Undo the last payment recorded by the app for this month. Specify the complete set of its currently selected 1-based rows.",
+    "requiresSelection": true,
+    "parameters": {
+      "type": "object", "additionalProperties": false, "required": ["rows"],
+      "properties": { "rows": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "minItems": 1, "uniqueItems": true } }
+    }
+  },
+  {
+    "name": "void_bills",
+    "description": "Void specified active bills. Use 1-based selected row numbers. By default only the specified rows change. If the user asks to void an entire installment series, pass one selected installment row and scope=installment.",
+    "requiresSelection": true,
+    "parameters": {
+      "type": "object", "additionalProperties": false, "required": ["rows"],
+      "properties": {
+        "rows": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "minItems": 1, "uniqueItems": true },
+        "scope": { "type": "string", "enum": ["entry", "installment"] }
+      }
+    }
+  },
+  {
+    "name": "restore_bill",
+    "description": "Restore a selected voided bill using its 1-based row. By default only that row changes. For an explicitly requested whole installment series, use scope=installment.",
+    "requiresSelection": true,
+    "parameters": {
+      "type": "object", "additionalProperties": false, "required": ["row"],
+      "properties": {
+        "row": { "type": "integer", "minimum": 1 },
+        "scope": { "type": "string", "enum": ["entry", "installment"] }
+      }
+    }
+  },
+  {
+    "name": "confirm_estimate",
+    "description": "Confirm a selected estimate on its original record. Its title, repayment month, remaining amount, total price and paid deposit can be corrected. All amounts are in cents. totalCents must equal depositCents plus amountCents. Changing only the deposit keeps the original total. Changing only the balance keeps the original deposit.",
+    "requiresSelection": true,
+    "parameters": {
+      "type": "object", "additionalProperties": false, "required": ["row"],
+      "properties": {
+        "row": { "type": "integer", "minimum": 1 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "month": { "type": "string", "description": "Repayment month YYYY-MM" },
+        "amountCents": { "type": "integer", "minimum": 0, "maximum": 99999999900 },
+        "totalCents": { "type": "integer", "minimum": 1, "maximum": 99999999900 },
+        "depositCents": { "type": "integer", "minimum": 0, "maximum": 99999999900 }
+      }
+    }
+  },
+  {
+    "name": "create_bill",
+    "description": "Create a bill on an existing named platform. For single use amountCents; for installment use amountCents (per period) and installmentCount; for estimate use the total price totalCents and optional paid deposit depositCents. The user reviews the amount and month.",
+    "requiresSelection": false,
+    "parameters": {
+      "type": "object", "additionalProperties": false, "required": ["platform", "title", "kind"],
+      "properties": {
+        "platform": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "kind": { "type": "string", "enum": ["single", "installment", "estimate"] },
+        "month": { "type": "string", "description": "Repayment month or first installment month YYYY-MM; omit for the current chat month" },
+        "amountCents": { "type": "integer", "minimum": 0, "maximum": 99999999900 },
+        "installmentCount": { "type": "integer", "minimum": 1, "maximum": 120 },
+        "totalCents": { "type": "integer", "minimum": 1, "maximum": 99999999900 },
+        "depositCents": { "type": "integer", "minimum": 0, "maximum": 99999999900 }
+      }
+    }
+  },
+  {
+    "name": "create_platform",
+    "description": "Create a repayment platform with the name supplied by the user.",
+    "requiresSelection": false,
+    "parameters": {
+      "type": "object", "additionalProperties": false, "required": ["name"],
+      "properties": { "name": { "type": "string", "minLength": 1, "maxLength": 40 } }
+    }
+  },
+  {
+    "name": "update_budget",
+    "description": "Update only the requested salary or warning settings in integer cents. Supply at least one of defaultSalaryCents, warningFloorCents or overrideSalaryCents. For a monthly override, month defaults to the month shown in chat. Null explicitly removes that month's override.",
+    "requiresSelection": false,
+    "parameters": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "month": { "type": "string", "description": "Override month YYYY-MM" },
+        "defaultSalaryCents": { "type": "integer", "minimum": 0, "maximum": 99999999900 },
+        "warningFloorCents": { "type": "integer", "minimum": 0, "maximum": 99999999900 },
+        "overrideSalaryCents": { "type": ["integer", "null"], "minimum": 0, "maximum": 99999999900 }
+      }
+    }
+  }
+]

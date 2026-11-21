@@ -80,6 +80,13 @@ fn rejects_private_or_invalid_entry_fields() {
     let facts = summary();
     let entry = json!({"platform":"菜市场","title":"杂粮","status":"due","kind":"single","amountCents":2990});
     let attachment = json!({"month":facts.month,"entries":[entry]});
+    let mut voided = attachment.clone();
+    voided["entries"][0]["voided"] = json!(true);
+    let rows = serde_json::from_value::<ChatMonthDetails>(voided.clone()).unwrap();
+    assert_eq!(
+        user_payload(&turns(Some(&facts), Some(&rows)).unwrap())["details"],
+        voided
+    );
     for field in ["id", "platformId", "month", "voided"] {
         let mut input = attachment.clone();
         input["entries"][0][field] = json!("unexpected");

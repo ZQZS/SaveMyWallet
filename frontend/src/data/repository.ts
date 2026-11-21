@@ -2,13 +2,15 @@ import type { BillInput, BudgetInput, EstimateInput, LedgerData } from '../domai
 
 export interface LedgerRepository {
   load(): Promise<LedgerData>
+  /** The returned writer rejects the edit if a sync or another write changes the reviewed snapshot. */
+  beginReviewedWrite?(): Promise<{ ledger: LedgerData; repository: LedgerRepository }>
   createPlatform(name: string): Promise<string>
   createBill(input: BillInput): Promise<void>
   createBills(inputs: BillInput[], operationId?: string): Promise<void>
   confirmEstimate(input: EstimateInput): Promise<void>
-  setEntryVoided(id: string, voided: boolean): Promise<void>
+  setEntryVoided(id: string, voided: boolean, operationId?: string): Promise<void>
   voidEntries(ids: string[], operationId?: string): Promise<string[]>
-  setInstallmentVoided(id: string, voided: boolean): Promise<string[]>
+  setInstallmentVoided(id: string, voided: boolean, operationId?: string): Promise<string[]>
   setPayment(ids: string[], paid: boolean, operationId?: string): Promise<string[]>
   undoPayment?(ids: string[], paid: boolean): Promise<string[]>
   saveBudget(input: BudgetInput): Promise<void>

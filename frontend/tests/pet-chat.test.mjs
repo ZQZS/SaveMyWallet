@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { effectScope } from 'vue'
-import { MAX_PET_MESSAGE_LENGTH, usePetChat } from '../src/features/pets/usePetChat.ts'
+import { MAX_PET_MESSAGE_LENGTH, useGeneralChat, usePetChat } from '../src/features/pets/usePetChat.ts'
 
 const month = '2026-11'
 const pet = { name: '测试狐', description: '好奇', greetings: ['一起查线索？'] }
@@ -17,6 +17,43 @@ function ask(chat, question, facts, details) {
   chat.draft.value = question
   return chat.send('zh-CN', facts, details)
 }
+
+test('a confirmed write that finishes after switching threads leaves the receipt in its original chat', async t => {
+  const saved = Promise.withResolvers()
+  const chat = openChat(t, { ...pet, id: 'receipt-after-switch' }, async (_input, signal, run) => {
+    await run('create_bill', {}, signal)
+    throw new Error('AI_CANCELLED')
+  })
+  chat.draft.value = '添加账单'
+  const pending = chat.send('zh-CN', undefined, undefined, () => saved.promise)
+  const original = chat.activeConversationId.value
+  chat.newChat()
+  saved.resolve({ status: 'saved_pending_refresh', message: '已保存，请重新读取。' })
+  assert.equal(await pending, true)
+  assert.deepEqual(chat.messages.value, [])
+  chat.selectChat(original)
+  assert.deepEqual(chat.messages.value.map(item => item.content), ['添加账单', '已保存，请重新读取。'])
+  assert.equal(chat.draft.value, '')
+})
+
+test('several action results share one transcript entry and native error details stay in the visible chat', async t => {
+  const calls = []
+  const chat = openChat(t, { ...pet, id: 'mixed-receipt' }, async (input, signal, run) => {
+    calls.push(input)
+    if (!run) return 'OK'
+    await run('create_platform', {}, signal)
+    await run('update_budget', {}, signal)
+    return 'tool batch'
+  })
+  chat.draft.value = '新增平台并调整预算'
+  await chat.send('zh-CN', undefined, undefined, async name => name === 'create_platform'
+    ? { status: 'applied', message: '平台已创建。' }
+    : { status: 'failed', message: '写入失败，包含仅本机可见字段。' })
+  assert.deepEqual(chat.messages.value.map(item => item.content), ['新增平台并调整预算', '平台已创建。\n写入失败，包含仅本机可见字段。'])
+  await ask(chat, '上次成功了吗？')
+  assert.ok(calls[1].messages[1].content.includes('平台已创建。'))
+  assert.ok(!JSON.stringify(calls[1]).includes('仅本机可见'))
+})
 
 test('勾选只附四个汇总字段，取消勾选后历史中引用的金额留在本机', async t => {
   const calls = []
@@ -266,4 +303,41 @@ test('扩大明细选择可继续追问，减少完全相同的账目笔数也�
   assert.deepEqual(calls[1].messages.map(item => item.content), ['看这两笔', '刚才选择了 2 笔。', '加一笔'])
   assert.equal(await ask(chat, '从重复的两笔中取消一笔', facts, { month, entries: [identical, another] }), true)
   assert.deepEqual(calls[2].messages, [{ role: 'user', content: '从重复的两笔中取消一笔' }])
+})
+
+test('通用聊天可独立发送日常话题，按月份保存对话，收窄分享时截断账务历史', async t => {
+  const scope = effectScope()
+  t.after(() => scope.stop())
+  const calls = []
+  const request = async input => {
+    calls.push(input)
+    return input.details ? '这笔待还 12 元。' : '下雨的傍晚，我们出发了。'
+  }
+  const selectedMonth = '2027-04'
+  const general = scope.run(() => useGeneralChat(selectedMonth, request))
+  const petChat = openChat(t, { ...pet, id: 'general' }, request, selectedMonth)
+  assert.equal(await ask(petChat, '你好，小狐！'), true)
+  assert.equal(calls[0].mode, 'pet')
+  assert.deepEqual(general.messages.value, [])
+  assert.equal(await ask(general, '帮我写一句短篇故事的开头'), true)
+  assert.equal(calls[1].mode, 'general')
+  assert.ok(!Object.hasOwn(calls[1], 'character'))
+  assert.ok(!Object.hasOwn(calls[1], 'facts'))
+  assert.ok(!Object.hasOwn(calls[1], 'details'))
+
+  const facts = { month: selectedMonth, balanceCents: 10000, dueCents: 1200, warningFloorCents: 0 }
+  const details = { month: selectedMonth, entries: [{ platform: '合成平台', title: '合成账目', kind: 'single', status: 'due', amountCents: 1200 }] }
+  assert.equal(await ask(general, '选中的账单待还多少？', facts, details), true)
+  assert.deepEqual(calls[2].details, details)
+  assert.equal(await ask(general, '继续写故事'), true)
+  assert.deepEqual(calls[3].messages, [{ role: 'user', content: '继续写故事' }])
+  assert.equal(petChat.messages.value.length, 2)
+
+  general.draft.value = '没写完的问题'
+  const reopened = scope.run(() => useGeneralChat(selectedMonth, request))
+  assert.equal(reopened.draft.value, '没写完的问题')
+  assert.equal(reopened.messages.value.length, 6)
+  const otherMonth = scope.run(() => useGeneralChat('2027-05', request))
+  assert.deepEqual(otherMonth.messages.value, [])
+  assert.equal(otherMonth.draft.value, '')
 })

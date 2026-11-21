@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { petChatDetailOptions, petChatDetailsPayload, selectedPetChatDetails } from '../src/features/pets/petChatDetails.ts'
+import { petChatDetailOptions, petChatDetailsPayload, selectedPetChatDetails, selectedPetChatOptions } from '../src/features/pets/petChatDetails.ts'
 
 const month = '2026-11'
 const platform = { id: 'local-platform', name: '玩具店' }
@@ -38,6 +38,20 @@ test('按原账本表达每期金额、全额预付和旧预计补款，IPC 仅�
   ])
   const tagged = { ...shared, deviceId: 'private-device', entries: shared.entries.map(entry => ({ ...entry, id: 'private-id', platformId: 'private-platform', note: 'private-note' })) }
   assert.deepEqual(petChatDetailsPayload(tagged), shared)
+})
+
+test('本轮按界面顺序给勾选项编号，明确选择的作废项带状态，本机 ID 留在映射中', () => {
+  const entries = [bill('local-a'), bill('local-b', { voided: true }), bill('local-c'), bill('local-d')]
+  const options = petChatDetailOptions(month, { groups: [{ platform, entries }] }, true)
+  const selected = new Set(['local-c', 'local-b', 'local-a'])
+  const snapshot = selectedPetChatOptions(month, options, selected)
+  const shared = selectedPetChatDetails(month, options, selected)
+  selected.delete('local-a')
+  assert.deepEqual(snapshot.map(row => row.id), ['local-a', 'local-b', 'local-c'])
+  assert.deepEqual(shared.entries, snapshot.map(row => row.detail))
+  assert.deepEqual(shared.entries.map(row => row.voided), [undefined, true, undefined])
+  assert.ok(!JSON.stringify(shared).includes('local-'))
+  assert.deepEqual(selectedPetChatOptions('2026-12', options, selected), [])
 })
 
 test('较大的月度清单仍能预览并选择末尾的明细', () => {

@@ -4,6 +4,7 @@ import type { LedgerSearchFilters } from '../../features/ai/ledgerSearch.ts'
 import type { NoticeDraft } from '../../features/ai/noticeMatch.ts'
 import type { ReminderFacts } from './capabilities.ts'
 import type { PetChatDetails } from '../../features/pets/petChatDetails.ts'
+import type { AgentChatInput, AgentTurn, ToolRound } from './agentChat.ts'
 import { readBillRecognition } from './visionDrafts.ts'
 
 export interface SelectedAiImage {
@@ -74,8 +75,8 @@ export interface PetChatInput {
   details?: PetChatDetails
 }
 
-export function chatWithPet(input: PetChatInput, signal: AbortSignal) {
-  return request<string>('ai_pet_chat', { ...input }, signal)
+export function requestAgentTurn(input: AgentChatInput, toolRounds: ToolRound[], actionToolsEnabled: boolean, signal?: AbortSignal) {
+  return request<AgentTurn>('ai_agent_chat_turn', { ...input, toolRounds, actionToolsEnabled }, signal)
 }
 
 export function parseScenario(message: string, referenceMonth: string, signal?: AbortSignal) {

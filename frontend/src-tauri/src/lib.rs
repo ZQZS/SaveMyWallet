@@ -3,6 +3,7 @@ mod backup_files;
 mod ledger;
 mod sync_client;
 
+use ledger::review::{LedgerWrite, ReviewedLedger};
 use ledger::{BillInput, BudgetInput, ConfirmInput, Ledger, StorageResult};
 use rusqlite::Connection;
 use std::{fs, path::PathBuf, sync::Mutex};
@@ -33,6 +34,14 @@ impl Database {
         let conn = storage.as_mut().ok_or("无法连接本地账本")?;
         operation(conn).map_err(|e| e.to_string())
     }
+
+    fn access_checked<T>(
+        &self,
+        expected_revision: Option<&str>,
+        operation: impl FnOnce(LedgerWrite<'_>) -> StorageResult<T>,
+    ) -> Result<T, String> {
+        self.access(|conn| operation(LedgerWrite::new(conn, expected_revision)))
+    }
 }
 
 #[tauri::command(async)]
@@ -41,33 +50,75 @@ fn load_ledger(db: State<'_, Database>) -> Result<Ledger, String> {
 }
 
 #[tauri::command(async)]
-fn create_platform(db: State<'_, Database>, name: String) -> Result<String, String> {
-    db.access(|conn| ledger::add_platform(conn, &name))
+fn load_reviewed_ledger(db: State<'_, Database>) -> Result<ReviewedLedger, String> {
+    db.access(ledger::review::snapshot)
 }
 
 #[tauri::command(async)]
-fn create_bill(db: State<'_, Database>, input: BillInput) -> Result<(), String> {
-    db.access(|conn| ledger::add_bill(conn, input))
+fn create_platform(
+    db: State<'_, Database>,
+    name: String,
+    expected_revision: Option<String>,
+) -> Result<String, String> {
+    db.access_checked(expected_revision.as_deref(), |write| {
+        ledger::add_platform(write, &name)
+    })
 }
 
 #[tauri::command(async)]
-fn create_bills(db: State<'_, Database>, inputs: Vec<BillInput>) -> Result<(), String> {
-    db.access(|conn| ledger::add_bills(conn, &inputs))
+fn create_bill(
+    db: State<'_, Database>,
+    input: BillInput,
+    expected_revision: Option<String>,
+) -> Result<(), String> {
+    db.access_checked(expected_revision.as_deref(), |write| {
+        ledger::add_bill(write, input)
+    })
 }
 
 #[tauri::command(async)]
-fn confirm_estimate(db: State<'_, Database>, input: ConfirmInput) -> Result<(), String> {
-    db.access(|conn| ledger::confirm(conn, input))
+fn create_bills(
+    db: State<'_, Database>,
+    inputs: Vec<BillInput>,
+    expected_revision: Option<String>,
+) -> Result<(), String> {
+    db.access_checked(expected_revision.as_deref(), |write| {
+        ledger::add_bills(write, &inputs)
+    })
 }
 
 #[tauri::command(async)]
-fn set_entry_voided(db: State<'_, Database>, id: String, voided: bool) -> Result<(), String> {
-    db.access(|conn| ledger::set_entry_voided(conn, &id, voided))
+fn confirm_estimate(
+    db: State<'_, Database>,
+    input: ConfirmInput,
+    expected_revision: Option<String>,
+) -> Result<(), String> {
+    db.access_checked(expected_revision.as_deref(), |write| {
+        ledger::confirm(write, input)
+    })
 }
 
 #[tauri::command(async)]
-fn void_entries(db: State<'_, Database>, ids: Vec<String>) -> Result<Vec<String>, String> {
-    db.access(|conn| ledger::set_entries_voided(conn, &ids, true))
+fn set_entry_voided(
+    db: State<'_, Database>,
+    id: String,
+    voided: bool,
+    expected_revision: Option<String>,
+) -> Result<(), String> {
+    db.access_checked(expected_revision.as_deref(), |write| {
+        ledger::set_entry_voided(write, &id, voided)
+    })
+}
+
+#[tauri::command(async)]
+fn void_entries(
+    db: State<'_, Database>,
+    ids: Vec<String>,
+    expected_revision: Option<String>,
+) -> Result<Vec<String>, String> {
+    db.access_checked(expected_revision.as_deref(), |write| {
+        ledger::set_entries_voided(write, &ids, true)
+    })
 }
 
 #[tauri::command(async)]
@@ -75,8 +126,11 @@ fn set_installment_voided(
     db: State<'_, Database>,
     id: String,
     voided: bool,
+    expected_revision: Option<String>,
 ) -> Result<Vec<String>, String> {
-    db.access(|conn| ledger::set_installment_voided(conn, &id, voided))
+    db.access_checked(expected_revision.as_deref(), |write| {
+        ledger::set_installment_voided(write, &id, voided)
+    })
 }
 
 #[tauri::command(async)]
@@ -84,8 +138,11 @@ fn set_payment(
     db: State<'_, Database>,
     ids: Vec<String>,
     paid: bool,
+    expected_revision: Option<String>,
 ) -> Result<Vec<String>, String> {
-    db.access(|conn| ledger::mark_payment(conn, &ids, paid))
+    db.access_checked(expected_revision.as_deref(), |write| {
+        ledger::mark_payment(write, &ids, paid)
+    })
 }
 
 #[tauri::command(async)]
@@ -93,13 +150,22 @@ fn undo_payment(
     db: State<'_, Database>,
     ids: Vec<String>,
     paid: bool,
+    expected_revision: Option<String>,
 ) -> Result<Vec<String>, String> {
-    db.access(|conn| ledger::undo_payment(conn, &ids, paid))
+    db.access_checked(expected_revision.as_deref(), |write| {
+        ledger::undo_payment(write, &ids, paid)
+    })
 }
 
 #[tauri::command(async)]
-fn save_budget(db: State<'_, Database>, input: BudgetInput) -> Result<(), String> {
-    db.access(|conn| ledger::budget(conn, input))
+fn save_budget(
+    db: State<'_, Database>,
+    input: BudgetInput,
+    expected_revision: Option<String>,
+) -> Result<(), String> {
+    db.access_checked(expected_revision.as_deref(), |write| {
+        ledger::budget(write, input)
+    })
 }
 
 #[tauri::command(async)]
@@ -146,6 +212,7 @@ pub fn run() {
             ai::ai_explain,
             ai::spending::ai_classify_spending,
             ai::pet_chat::ai_pet_chat,
+            ai::pet_chat::agent::ai_agent_chat_turn,
             ai::ai_parse_scenario,
             ai::assistant_inputs::ai_parse_notice,
             ai::assistant_inputs::ai_parse_search,
@@ -156,6 +223,7 @@ pub fn run() {
             backup_files::choose_backup_file,
             backup_files::save_backup_file,
             load_ledger,
+            load_reviewed_ledger,
             create_platform,
             create_bill,
             create_bills,
