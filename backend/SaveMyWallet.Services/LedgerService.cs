@@ -45,6 +45,10 @@ public sealed class LedgerService(ISyncStore store) : ILedgerService
         store.ExecuteRestAsync(ledgerId, operationId, Fingerprint(operationId, "POST /bills/confirm", new { id, input }),
             rows => LedgerCommands.Confirm(rows, id, input), ct);
 
+    public Task<ChangedIdsQueryResultDto> VoidBillsAsync(string ledgerId, string operationId, VoidBillsQueryDto input, CancellationToken ct) =>
+        store.ExecuteRestAsync(ledgerId, operationId, Fingerprint(operationId, "PUT /bills/voided", input),
+            rows => LedgerCommands.VoidBills(rows, input), ct);
+
     public Task SetVoidedAsync(string ledgerId, string operationId, string id, BillValidityQueryDto input, CancellationToken ct) =>
         store.ExecuteRestAsync(ledgerId, operationId, Fingerprint(operationId, "PUT /bills/voided", new { id, input }),
             rows => LedgerCommands.SetVoided(rows, id, input.Voided), ct);

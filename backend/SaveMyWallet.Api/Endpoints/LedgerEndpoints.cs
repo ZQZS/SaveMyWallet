@@ -21,6 +21,8 @@ public static class LedgerEndpoints
             NoContentAsync(service.CreateBillsAsync(LedgerAccess.Id(ctx), OperationId(ctx), inputs, ct)));
         app.MapPost("/bills/{id}/confirm", (HttpContext ctx, ILedgerService service, string id, ConfirmationQueryDto input, CancellationToken ct) =>
             NoContentAsync(service.ConfirmAsync(LedgerAccess.Id(ctx), OperationId(ctx), BillId(ctx, id), input, ct)));
+        app.MapPut("/bills/voided", (HttpContext ctx, ILedgerService service, VoidBillsQueryDto input, CancellationToken ct) =>
+            service.VoidBillsAsync(LedgerAccess.Id(ctx), OperationId(ctx), input, ct));
         app.MapPut("/bills/{id}/voided", (HttpContext ctx, ILedgerService service, string id, BillValidityQueryDto input, CancellationToken ct) =>
             NoContentAsync(service.SetVoidedAsync(LedgerAccess.Id(ctx), OperationId(ctx), BillId(ctx, id), input, ct)));
         app.MapPut("/bills/{id}/installment/voided", (HttpContext ctx, ILedgerService service, string id, BillValidityQueryDto input, CancellationToken ct) =>

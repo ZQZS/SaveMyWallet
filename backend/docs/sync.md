@@ -14,6 +14,7 @@ Windows 和安卓始终从各自的 SQLite 读取账本。业务写入与待上�
 | `POST /bills/batch` | 由一个或多个账单对象组成的数组，字段与 `POST /bills` 相同 | `204`。整批在同一事务入账，任一账单无效时整批回滚 |
 | `POST /bills/{id}/confirm` | `{ "title": "尾款", "month": "2027-01", "amountCents": 35000 }` | `204`。同一条预计补款原位确认，相同内容可重试，已确认且内容不同返回 `409` |
 | `PUT /bills/{id}/voided` | `{ "voided": true }` 作废或 `{ "voided": false }` 恢复 | `204`。只变更指定明细，重复设置同一状态不会推进游标 |
+| `PUT /bills/voided` | `{ "ids": ["e2", "e1"] }` 批量作废所选明细，分期仅作废选中的期次 | `200 { "changedIds": ["e2", "e1"] }`，按请求顺序返回实际作废的 ID。重复 ID 只处理一次，已作废的明细会跳过。空数组返回空结果，任一明细不存在时返回 `404 unknown_entry` 并回滚整批 |
 | `PUT /bills/{id}/installment/voided` | `{ "voided": true }` 作废整笔分期，或 `{ "voided": false }` 恢复整笔分期。路径中的 ID 可取其中任意一期 | `200 { "changedIds": ["e1", "e3"] }`，按期次返回本次实际改变的明细 ID，所有变更在同一事务提交 |
 | `PATCH /payments` | `{ "ids": ["e1", "e2"], "paid": true }` | `200 { "changedIds": ["e1"] }`，仅含此次实际改变的明细 |
 | `PUT /budget` | `{ "month": "2027-01", "defaultSalaryCents": 600000, "warningFloorCents": 80000, "overrideSalaryCents": 0 }` | `204`。单月覆盖为 `0` 表示该月无工资，`null` 表示清除覆盖 |

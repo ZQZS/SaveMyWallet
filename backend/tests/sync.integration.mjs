@@ -312,6 +312,46 @@ test('two isolated ledgers sync through the running PostgreSQL API', async t => 
     assert.equal((await request('/bills/' + randomUUID() + '/voided', restore)).status, 404)
   })
 
+  await t.test('batch void is atomic, idempotent and limited to the selected entries of the current ledger', async () => {
+    const first = { ...entry(platformId, 'installment', '批量作废分期'), status: 'paid',
+      installmentId: randomUUID().replaceAll('-', ''), installmentIndex: 1, installmentCount: 2 }
+    const sibling = { ...first, id: randomUUID(), status: 'due', month: '2027-01', installmentIndex: 2 }
+    const estimate = { ...entry(platformId, 'estimate', '批量作废尾款'), depositCents: 2000 }
+    const already = { ...entry(platformId, 'single', '已作废'), voided: true }
+    const fixtures = [first, sibling, estimate, already]
+    const before = success(await push(operation(fixtures.map(value => change('entry', value.id, value)))))
+    const send = (ids, key, token) => request('/bills/voided', { method: 'PUT', body: { ids }, key, token })
+
+    assert.deepEqual(success(await send([])), { changedIds: [] })
+    for (const invalid of [null, ' ', ' padded ']) {
+      assert.equal((await send([first.id, invalid])).status, 400)
+    }
+    const missing = await send([first.id, randomUUID()])
+    assert.deepEqual([missing.status, missing.data.code], [404, 'unknown_entry'])
+    assert.equal((await bootstrap()).cursor, before.cursor)
+
+    const ids = [estimate.id, already.id, first.id, estimate.id, first.id]
+    const key = randomUUID()
+    const result = { changedIds: [estimate.id, first.id] }
+    assert.deepEqual(success(await send(ids, key)), result)
+    const page = success(await request('/sync/pull?cursor=' + before.cursor))
+    assert.equal(page.cursor, before.cursor + 1)
+    assert.deepEqual(page.records.map(r => r.value).sort((a, b) => a.id.localeCompare(b.id)),
+      [estimate, first].map(value => ({ ...value, voided: true })).sort((a, b) => a.id.localeCompare(b.id)))
+    assert.deepEqual((await bootstrap()).records.find(r => r.id === sibling.id).value, sibling)
+    assert.deepEqual(success(await send(ids)), { changedIds: [] })
+    assert.equal((await bootstrap()).cursor, page.cursor)
+
+    const reused = await send([sibling.id], key)
+    assert.deepEqual([reused.status, reused.data.code], [409, 'replay_mismatch'])
+    assert.equal((await send(ids, key, secondary)).status, 404)
+    success(await request('/bills/' + first.id + '/voided', { method: 'PUT', body: { voided: false } }))
+    assert.deepEqual(success(await send(ids, key)), result)
+    const restored = await bootstrap()
+    assert.equal(restored.cursor, page.cursor + 1)
+    assert.deepEqual(restored.records.find(r => r.id === first.id).value, first)
+  })
+
   await t.test('a whole purchase changes in one commit and stays separate from an identical purchase', async () => {
     const bill = { platformId, kind: 'installment', title: '同款分期', month: '2026-12', amountCents: 5000, installmentCount: 3 }
     for (let i = 0; i < 2; i++) success(await request('/bills', { method: 'POST', body: bill }))

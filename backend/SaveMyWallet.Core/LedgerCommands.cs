@@ -106,11 +106,27 @@ public static class LedgerCommands
         return new(change is null ? [] : [change]);
     }
 
-    public static RestMutationEntityDto<ChangedIdsQueryResultDto> SetInstallmentVoided(IReadOnlyList<SyncRecordEntityDto> rows, string id, bool voided)
+    public static RestMutationEntityDto<ChangedIdsQueryResultDto> VoidBills(IReadOnlyList<SyncRecordEntityDto> rows, VoidBillsQueryDto input)
+    {
+        LedgerRules.Require(input.Ids is not null, "invalid_ids", "Supply the entry IDs to void.");
+        var entries = rows.Where(r => r.Kind == SyncRecordKind.Entry).ToDictionary(r => r.Id, StringComparer.Ordinal);
+        var selected = input.Ids!.Distinct(StringComparer.Ordinal).Select(id =>
+        {
+            LedgerRules.ValidateId(id);
+            return RequireEntry(entries.GetValueOrDefault(id));
+        });
+        return ApplyVoidChanges(selected, true);
+    }
+
+    public static RestMutationEntityDto<ChangedIdsQueryResultDto> SetInstallmentVoided(IReadOnlyList<SyncRecordEntityDto> rows, string id, bool voided) =>
+        ApplyVoidChanges(InstallmentSeries.Find(rows, FindEntry(rows, id).Entry), voided);
+
+    private static RestMutationEntityDto<ChangedIdsQueryResultDto> ApplyVoidChanges(
+        IEnumerable<(SyncRecordEntityDto Row, BillEntryQueryResultDto Entry)> selected, bool voided)
     {
         var changes = new List<SyncChangeQueryDto>();
         var changedIds = new List<string>();
-        foreach (var (row, entry) in InstallmentSeries.Find(rows, FindEntry(rows, id).Entry))
+        foreach (var (row, entry) in selected)
         {
             if (VoidChange(row, entry, voided) is not { } change) continue;
             changes.Add(change);
@@ -130,9 +146,11 @@ public static class LedgerCommands
     private static SyncChangeQueryDto EntryChange(SyncRecordEntityDto row, BillEntryQueryResultDto entry) =>
         new(SyncRecordKind.Entry, row.Id, row.Version, row.Value, entry);
 
-    private static (SyncRecordEntityDto Row, BillEntryQueryResultDto Entry) FindEntry(IReadOnlyList<SyncRecordEntityDto> rows, string id)
+    private static (SyncRecordEntityDto Row, BillEntryQueryResultDto Entry) FindEntry(IReadOnlyList<SyncRecordEntityDto> rows, string id) =>
+        RequireEntry(rows.FirstOrDefault(r => r.Kind == SyncRecordKind.Entry && r.Id == id));
+
+    private static (SyncRecordEntityDto Row, BillEntryQueryResultDto Entry) RequireEntry(SyncRecordEntityDto? row)
     {
-        var row = rows.FirstOrDefault(r => r.Kind == SyncRecordKind.Entry && r.Id == id);
         if (row?.Value is BillEntryQueryResultDto entry) return (row, entry);
         throw new LedgerException(404, "unknown_entry", "Bill not found.");
     }
