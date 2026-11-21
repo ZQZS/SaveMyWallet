@@ -19,6 +19,8 @@ export const aiSettingsMessages = {
     'aiSettings.reminder': '月度解释发送所选月份、预计结余、已确认待还金额和结余警告线。',
     'aiSettings.image': '截图识别发送你预览后确认的账单图片。',
     'aiSettings.scenario': '解析分期条件时发送你输入的问题和参考月份，逐月试算由本机完成。',
+    'aiSettings.notice': '尾款对账发送你提交的通知文字或截图，以及选中的月份。原账单的匹配和金额对比在本机完成。',
+    'aiSettings.search': '一句话查账发送你的问题和选中的月份，明细筛选和金额合计在本机完成。',
     'aiSettings.billing': '主动请求模型时，DeepSeek 会按照你的 API 账户用量计费。',
   },
   'en-US': {
@@ -41,6 +43,8 @@ export const aiSettingsMessages = {
     'aiSettings.reminder': 'Monthly explanations send the selected month, projected balance, confirmed outstanding amount and warning threshold.',
     'aiSettings.image': 'Screenshot recognition sends the bill image you preview and confirm.',
     'aiSettings.scenario': 'To interpret installments, DeepSeek receives your question and the reference month. The monthly projections are calculated on this device.',
+    'aiSettings.notice': 'To reconcile a balance notice, DeepSeek receives the notice text or screenshot you submit and the selected month. The app matches existing bills and compares amounts on this device.',
+    'aiSettings.search': 'Ledger search sends your question and the selected month to DeepSeek. Your device filters the entries and calculates totals.',
     'aiSettings.billing': 'DeepSeek bills model requests to your API account based on usage.',
   },
 } as const

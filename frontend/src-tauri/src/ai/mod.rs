@@ -1,3 +1,4 @@
+pub(crate) mod assistant_inputs;
 pub(crate) mod credentials;
 mod deepseek;
 pub(crate) mod images;

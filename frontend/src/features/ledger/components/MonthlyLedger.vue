@@ -1,17 +1,30 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { nextTick, ref, watch } from 'vue'
 import { BookOpen } from 'lucide-vue-next'
 import type { PlatformGroup, Entry } from '../../../domain/ledger'
 import { formatMoney, t } from '../../../i18n'
 import PlatformRepaymentGroup from './PlatformRepaymentGroup.vue'
 
-defineProps<{ groups: PlatformGroup[]; paid: number; busy: boolean }>()
+const props = defineProps<{ groups: PlatformGroup[]; paid: number; busy: boolean; linkedEntry?: Entry }>()
 const emit = defineEmits<{
   pay: [ids: string[], paid: boolean]
   confirm: [entry: Entry]
   setVoided: [entry: Entry, voided: boolean]
 }>()
 const expanded = ref<string | null>(null)
+const checklist = ref<HTMLElement | null>(null)
+
+watch([() => props.linkedEntry?.id, () => props.linkedEntry?.platformId], async ([id, platformId]) => {
+  if (!id || !platformId) return
+  expanded.value = platformId
+  await nextTick()
+  if (props.linkedEntry?.id !== id) return
+  const row = checklist.value?.querySelector<HTMLElement>('.linked-entry')
+  if (row) {
+    row.focus({ preventScroll: true })
+    row.scrollIntoView({ block: 'center' })
+  }
+}, { immediate: true })
 
 function toggleGroup(id: string) {
   expanded.value = expanded.value === id ? null : id
@@ -19,7 +32,7 @@ function toggleGroup(id: string) {
 </script>
 
 <template>
-  <section class="ledger-section" aria-labelledby="repayments-heading">
+  <section ref="checklist" class="ledger-section" aria-labelledby="repayments-heading">
     <div class="section-heading">
       <h2 id="repayments-heading">{{ t('ledger.checklist') }}</h2>
       <span class="platform-count">{{ t('ledger.platformCount', { count: groups.length, amount: formatMoney(paid) }) }}</span>
@@ -31,7 +44,7 @@ function toggleGroup(id: string) {
       </div>
       <ul class="platform-list">
         <PlatformRepaymentGroup v-for="group in groups" :key="group.platform.id"
-          :group="group" :expanded="expanded === group.platform.id" :busy="busy"
+          :group="group" :expanded="expanded === group.platform.id" :busy="busy" :linked-id="linkedEntry?.id"
           @toggle="toggleGroup(group.platform.id)" @pay="(ids, paid) => emit('pay', ids, paid)"
           @confirm="emit('confirm', $event)" @set-voided="(entry, voided) => emit('setVoided', entry, voided)" />
       </ul>

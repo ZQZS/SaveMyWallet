@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { useRouter } from 'vue-router'
-import { ChevronLeft, ChevronRight, Plus, Undo2 } from 'lucide-vue-next'
+import { computed, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { ChevronLeft, ChevronRight, ClipboardCheck, Plus, Search, Undo2 } from 'lucide-vue-next'
 import { useLedgerSession } from '../../app/ledgerSession'
 import { currentMonth, installmentPeriods, MAX_MONTH, MIN_MONTH, shiftMonth, type Entry } from '../../domain/ledger'
 import { formatMoney, formatMonth, t } from '../../i18n'
@@ -12,7 +12,23 @@ import InstallmentScopeDialog from './components/InstallmentScopeDialog.vue'
 import MonthlyAssistant from '../ai/MonthlyAssistant.vue'
 
 const router = useRouter()
+const route = useRoute()
 const { data, month, busy, notice, lastPayment, selectMonth, commit, repository, calculateMonth } = useLedgerSession()
+const linkedId = computed(() => typeof route.query.entry === 'string' ? route.query.entry : '')
+const linkedEntry = computed(() => linkedId.value ? data.value?.entries.find(entry => entry.id === linkedId.value) : undefined)
+
+watch(() => linkedEntry.value?.month, entryMonth => {
+  if (entryMonth && entryMonth !== month.value) selectMonth(entryMonth)
+}, { immediate: true })
+
+async function openMonth(value: string) {
+  if (route.query.entry !== undefined) {
+    const failure = await router.replace({ name: 'ledger', query: { ...route.query, entry: undefined } })
+    if (failure) return
+  }
+  selectMonth(value)
+}
+
 const totals = computed(() => data.value && calculateMonth(data.value, month.value))
 const nextMonth = computed(() => month.value < MAX_MONTH ? shiftMonth(month.value, 1) : null)
 const nextTotals = computed(() => data.value && nextMonth.value ? calculateMonth(data.value, nextMonth.value) : null)
@@ -81,11 +97,19 @@ function applyVoided(entry: Entry, voided: boolean, whole: boolean) {
         <h1>{{ formatMonth(month) }}</h1>
         <div class="month-controls" role="group" :aria-label="t('ledger.monthNavigation')">
           <button type="button" :aria-label="t('ledger.previousMonth')" :disabled="busy || month <= MIN_MONTH"
-            @click="selectMonth(shiftMonth(month, -1))"><ChevronLeft :size="16" aria-hidden="true" /></button>
-          <button type="button" :disabled="busy" @click="selectMonth(currentMonth())">{{ t('ledger.currentMonth') }}</button>
+            @click="openMonth(shiftMonth(month, -1))"><ChevronLeft :size="16" aria-hidden="true" /></button>
+          <button type="button" :disabled="busy" @click="openMonth(currentMonth())">{{ t('ledger.currentMonth') }}</button>
           <button type="button" :aria-label="t('ledger.nextMonth')" :disabled="busy || !nextMonth"
-            @click="nextMonth && selectMonth(nextMonth)"><ChevronRight :size="16" aria-hidden="true" /></button>
+            @click="nextMonth && openMonth(nextMonth)"><ChevronRight :size="16" aria-hidden="true" /></button>
         </div>
+      </div>
+      <div class="ledger-shortcuts" role="group" :aria-label="t('ledger.lookupTools')">
+        <button type="button" :disabled="busy" @click="router.push({ name: 'ledger-search' })">
+          <Search :size="16" aria-hidden="true" />{{ t('ai.search.tab') }}
+        </button>
+        <button type="button" :disabled="busy" @click="router.push({ name: 'notice-reconcile' })">
+          <ClipboardCheck :size="16" aria-hidden="true" />{{ t('notice.open') }}
+        </button>
       </div>
       <button class="add-button" type="button" :disabled="busy" @click="router.push({ name: 'bill-create' })">
         <Plus :size="17" aria-hidden="true" />{{ t('ledger.addBill') }}
@@ -98,7 +122,8 @@ function applyVoided(entry: Entry, voided: boolean, whole: boolean) {
 
     <MonthlyAssistant :key="month" :month="month" :ledger="data" :summary="totals" />
 
-    <MonthlyLedger :key="month" :groups="totals.groups" :paid="totals.paid" :busy="busy"
+    <p v-if="linkedId && !linkedEntry" class="notice" role="status">{{ t('ledger.linkedEntryMissing') }}</p>
+    <MonthlyLedger :key="month" :groups="totals.groups" :paid="totals.paid" :busy="busy" :linked-entry="linkedEntry"
       @pay="markPayments" @set-voided="chooseVoidScope" @confirm="router.push({ name: 'bill-confirm', params: { id: $event.id } })" />
 
     <InstallmentScopeDialog v-if="selectedPeriod" :entry="selectedPeriod" :periods="selectedPlan" :busy="busy"
@@ -112,7 +137,7 @@ function applyVoided(entry: Entry, voided: boolean, whole: boolean) {
     </div>
 
     <NextMonthPreview v-if="nextMonth && nextTotals" :month="nextMonth" :totals="nextTotals"
-      :floor="data.settings.warningFloorCents" :busy="busy" @open="selectMonth" />
+      :floor="data.settings.warningFloorCents" :busy="busy" @open="openMonth" />
   </div>
 </template>
 
@@ -121,8 +146,15 @@ function applyVoided(entry: Entry, voided: boolean, whole: boolean) {
 .monthly-ledger h1 { margin: 0; }
 .monthly-ledger button { font-family: inherit; cursor: pointer; }
 .monthly-ledger button:disabled { cursor: default; opacity: 0.55; }
-.month-heading, .month-period, .month-controls, .notice { display: flex; align-items: center; }
-.month-heading, .notice { justify-content: space-between; gap: 12px; }
+.month-period, .month-controls, .notice, .ledger-shortcuts { display: flex; align-items: center; }
+.month-heading { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 12px; }
+.notice { justify-content: space-between; gap: 12px; }
+.ledger-shortcuts { gap: 8px; }
+.ledger-shortcuts button { display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: 41px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--surface); color: var(--green); font-size: .85rem; font-weight: 600; }
+.ledger-shortcuts button:hover:not(:disabled) { background: var(--soft); }
+.ledger-shortcuts svg { flex-shrink: 0; }
 .month-period { gap: 14px; flex-wrap: wrap; min-width: 0; }
 .month-heading h1 { font-size: clamp(1.48rem, 3vw, 2rem); letter-spacing: -0.045em; line-height: 1.22; }
 .month-controls { background: var(--surface); padding: 1px; border: 1px solid var(--line); border-radius: 10px; }
@@ -140,6 +172,12 @@ function applyVoided(entry: Entry, voided: boolean, whole: boolean) {
 .notice { border-radius: 10px; background: var(--soft); padding: 6px 14px; min-height: 44px; font-size: 0.88rem; }
 .notice [role="status"] { min-width: 0; overflow-wrap: anywhere; }
 .notice button { display: inline-flex; align-items: center; gap: 5px; flex: none; background: transparent; border: 0; color: var(--green); min-height: 40px; font-weight: 650; }
+@media (max-width: 800px) {
+  .month-heading { grid-template-columns: minmax(0, 1fr) auto; }
+  .ledger-shortcuts { grid-column: 1 / -1; grid-row: 2; }
+  .ledger-shortcuts button { flex: 1; min-width: 0; min-height: 44px; }
+  .add-button { grid-column: 2; grid-row: 1; }
+}
 @media (max-width: 650px) {
   .monthly-ledger { gap: 14px; }
   .month-heading { align-items: flex-start; }

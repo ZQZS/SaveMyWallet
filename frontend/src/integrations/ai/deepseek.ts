@@ -1,5 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import type { AppLocale } from '../../i18n/index.ts'
+import type { LedgerSearchFilters } from '../../features/ai/ledgerSearch.ts'
+import type { NoticeDraft } from '../../features/ai/noticeMatch.ts'
 import type { ReminderFacts } from './capabilities.ts'
 import { readBillDrafts } from './visionDrafts.ts'
 
@@ -56,6 +58,15 @@ export function explainMonth(facts: ReminderFacts, language: AppLocale, signal?:
 
 export function parseScenario(message: string, referenceMonth: string, signal?: AbortSignal) {
   return request<ScenarioDraft>('ai_parse_scenario', { message, referenceMonth }, signal)
+}
+
+export function parseNotice(source: { text: string } | { imageToken: string }, referenceMonth: string, signal?: AbortSignal) {
+  const input = 'text' in source ? { message: source.text } : { imageToken: source.imageToken }
+  return request<NoticeDraft>('ai_parse_notice', { ...input, referenceMonth }, signal)
+}
+
+export function parseLedgerSearch(message: string, referenceMonth: string, signal?: AbortSignal) {
+  return request<LedgerSearchFilters & { supported: boolean }>('ai_parse_search', { message, referenceMonth }, signal)
 }
 
 export async function recognizeAiBills(imageToken: string, signal?: AbortSignal) {

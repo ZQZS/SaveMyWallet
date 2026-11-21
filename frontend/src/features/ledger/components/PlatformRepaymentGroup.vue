@@ -4,7 +4,7 @@ import { ChevronDown } from 'lucide-vue-next'
 import { estimateTotalCents, type Entry, type PlatformGroup } from '../../../domain/ledger'
 import { formatMoney, t } from '../../../i18n'
 
-const props = defineProps<{ group: PlatformGroup; expanded: boolean; busy: boolean }>()
+const props = defineProps<{ group: PlatformGroup; expanded: boolean; busy: boolean; linkedId?: string }>()
 const emit = defineEmits<{
   toggle: []
   pay: [ids: string[], paid: boolean]
@@ -78,7 +78,9 @@ function entryDescription(entry: Entry) {
       </button>
     </div>
     <ul v-if="expanded" class="details" :id="'details-' + group.platform.id" :aria-label="t('ledger.detailsFor', { name: group.platform.name })">
-      <li v-for="entry in group.entries" :key="entry.id" class="entry" :class="{ 'is-voided': entry.voided }">
+      <li v-for="entry in group.entries" :key="entry.id" class="entry"
+        :class="{ 'is-voided': entry.voided, 'linked-entry': linkedId === entry.id }"
+        :aria-current="linkedId === entry.id ? 'true' : undefined" :tabindex="linkedId === entry.id ? -1 : undefined">
         <span class="entry-title"><strong>{{ entry.title }}</strong><small>{{ entryDescription(entry) }}</small>
           <small v-if="entry.kind === 'estimate'">{{ t('ledger.estimateBreakdown', {
             total: formatMoney(estimateTotalCents(entry)), deposit: formatMoney(entry.depositCents ?? 0),
@@ -165,6 +167,8 @@ function entryDescription(entry: Entry) {
 .details { list-style: none; margin: 0; padding: 3px var(--row-padding) 3px calc(var(--check-width) + var(--column-gap) + var(--row-padding)); background: var(--paper); border-top: 1px dashed var(--line); }
 .entry { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, auto) auto auto; align-items: center; gap: 12px; padding: 8px 0; font-size: 0.88rem; }
 .entry + .entry { border-top: 1px solid var(--line); }
+.entry.linked-entry { outline: 2px solid var(--green); outline-offset: -2px; border-radius: 6px;
+  background: var(--soft); padding-inline: 6px; scroll-margin-block: 20px; }
 .entry-state, .entry-action { text-align: right; font-size: 0.8rem; }
 .entry-state { min-width: 48px; color: var(--sub); }
 .entry-state.is-paid { color: var(--green); }

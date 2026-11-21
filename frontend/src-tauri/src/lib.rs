@@ -135,6 +135,8 @@ pub fn run() {
             ai::ai_test_key,
             ai::ai_explain,
             ai::ai_parse_scenario,
+            ai::assistant_inputs::ai_parse_notice,
+            ai::assistant_inputs::ai_parse_search,
             ai::ai_recognize,
             ai::ai_cancel,
             ai::images::ai_choose_image,

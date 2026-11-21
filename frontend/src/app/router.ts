@@ -14,6 +14,8 @@ declare module 'vue-router' {
 const routes: RouteRecordRaw[] = [
   { path: '/', redirect: { name: 'ledger' } },
   { path: '/ledger', name: 'ledger', component: LedgerPage, meta: { menu: 'ledger' } },
+  { path: '/ledger/reconcile', name: 'notice-reconcile', component: () => import('../features/ai/NoticeReconciliation.vue'), meta: { menu: 'ledger' } },
+  { path: '/ledger/search', name: 'ledger-search', component: () => import('../features/ai/LedgerSearch.vue'), meta: { menu: 'ledger' } },
   { path: '/bills/new', name: 'bill-create', component: BillPage, meta: { menu: 'ledger' } },
   { path: '/bills/:id/confirm', name: 'bill-confirm', component: BillPage, meta: { menu: 'ledger' } },
   { path: '/platforms', name: 'platforms', component: PlatformsPage, meta: { menu: 'platforms' } },
@@ -26,7 +28,8 @@ export function createAppRouter(session: LedgerSession) {
   const router = createRouter({
     history: createWebHashHistory(),
     routes,
-    scrollBehavior: (_to, _from, saved) => saved ?? { top: 0 },
+    scrollBehavior: (to, _from, saved) =>
+      to.name === 'ledger' && typeof to.query.entry === 'string' ? false : saved ?? { top: 0 },
   })
   router.beforeEach((_to, from) => {
     if (from.name && (session.busy.value || session.needsReload.value)) return false
