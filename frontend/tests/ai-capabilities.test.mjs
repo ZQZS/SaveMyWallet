@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { toReminderFacts } from '../src/integrations/ai/capabilities.ts'
-import { estimateAmountsConflict, readBillDrafts } from '../src/integrations/ai/visionDrafts.ts'
+import { draftPlatformId, estimateAmountsConflict, readBillDrafts } from '../src/integrations/ai/visionDrafts.ts'
 import { MAX_AMOUNT_CENTS } from '../src/domain/ledger.ts'
 
 test('提醒上下文只提取指定月份的汇总事实', () => {
@@ -29,6 +29,16 @@ test('越界或无法辨认的字段留给审核，不接受模型提供的平�
   })
   assert.throws(() => readBillDrafts({ items: [] }), /drafts/)
   assert.throws(() => readBillDrafts({ drafts: [null] }), /第 1 条/)
+})
+
+test('识图草稿优先使用手选的平台 ID，自动识别按截图中的名称匹配', () => {
+  const platforms = [{ id: 'card', name: '信用卡' }, { id: 'shop', name: 'Shop' }]
+  assert.equal(draftPlatformId(platforms, 'Shop', 'card'), 'card')
+  assert.equal(draftPlatformId(platforms, null, 'card'), 'card')
+  assert.equal(draftPlatformId(platforms, ' shop '), 'shop')
+  assert.equal(draftPlatformId(platforms, 'Shop', 'removed'), 'shop')
+  assert.equal(draftPlatformId(platforms, '未知平台'), '')
+  assert.equal(draftPlatformId([], null, 'removed'), '')
 })
 
 test('截图中的尾款、总价和已付定金独立识别，有两项依据时补全金额', () => {

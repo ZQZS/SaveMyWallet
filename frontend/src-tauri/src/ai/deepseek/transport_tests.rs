@@ -56,7 +56,9 @@ fn synthetic_screenshot_reaches_chat_as_inline_image_and_returns_reviewable_draf
         let response = json!({"choices":[{"finish_reason":"stop","message":{"content":expected.to_string()}}]});
         let (provider, server) = fixture("200 OK", response);
         assert_eq!(
-            recognize(&provider, TEST_KEY, image.clone()).await.unwrap(),
+            recognize(&provider, TEST_KEY, image.clone(), None)
+                .await
+                .unwrap(),
             expected
         );
         let (headers, body) = server.join().unwrap();
@@ -67,11 +69,42 @@ fn synthetic_screenshot_reaches_chat_as_inline_image_and_returns_reviewable_draf
         let request: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(request["model"], "deepseek-flash");
         assert_eq!(request["response_format"]["type"], "json_object");
+        assert!(!request["messages"][1]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("selectedPlatform"));
         assert_eq!(
             request["messages"][1]["content"][1]["image_url"]["url"],
             image
         );
         assert!(!String::from_utf8(body).unwrap().contains(TEST_KEY));
+    });
+}
+
+#[test]
+fn chosen_platform_is_user_context_and_keeps_recognized_platform_evidence() {
+    tauri::async_runtime::block_on(async {
+        let chosen = "自定义\"平台\"";
+        let drafts = json!({"drafts": [{"platformHint": "截图平台"}, {"platformHint": null}]});
+        let response =
+            json!({"choices":[{"finish_reason":"stop","message":{"content":drafts.to_string()}}]});
+        let (provider, server) = fixture("200 OK", response);
+        assert_eq!(
+            recognize(&provider, TEST_KEY, "fixture-image".into(), Some(chosen))
+                .await
+                .unwrap(),
+            drafts
+        );
+        let (_, body) = server.join().unwrap();
+        let request: Value = serde_json::from_slice(&body).unwrap();
+        let user = &request["messages"][1];
+        assert_eq!(user["role"], "user");
+        let text = user["content"][0]["text"].as_str().unwrap();
+        let (_, context) = text.split_once('\n').unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(context).unwrap(),
+            json!({"selectedPlatform": chosen})
+        );
     });
 }
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ImagePlus } from 'lucide-vue-next'
 import { useLedgerSession } from '../../app/ledgerSession'
 import type { BillInput } from '../../domain/ledger'
@@ -19,6 +19,7 @@ const { data, month, busy, needsReload, repository, commit } = useLedgerSession(
 const { pending, error, run, cancel } = useAssistantRequest()
 const choosing = ref(false)
 const preview = ref('')
+const selectedPlatformId = ref('')
 const imageState = ref<'loading' | 'ready' | 'error'>('loading')
 const pickerError = ref('')
 const rows = ref<ReviewRow[] | null>(null)
@@ -29,6 +30,10 @@ const writing = computed(() => busy.value || needsReload.value)
 let token = ''
 let mounted = true
 
+watch(() => data.value?.platforms, platforms => {
+  if (!platforms?.some(platform => platform.id === selectedPlatformId.value)) selectedPlatformId.value = ''
+})
+
 function release() {
   if (token) void releaseAiImage(token).catch(() => {})
   token = ''
@@ -38,6 +43,7 @@ function close() {
   cancel()
   release()
   preview.value = ''
+  selectedPlatformId.value = ''
   pickerError.value = ''
   editing.value = null
   rows.value = null
@@ -72,7 +78,8 @@ async function choose() {
 
 function recognize() {
   if (!token || imageState.value !== 'ready' || choosing.value || pending.value || rows.value) return
-  void run(signal => recognizeAiBills(token, signal), drafts => {
+  const platform = data.value?.platforms.find(platform => platform.id === selectedPlatformId.value)
+  void run(signal => recognizeAiBills(token, signal, platform?.name), drafts => {
     release()
     rows.value = drafts.map(draft => ({ draft, status: 'pending' }))
     editing.value = drafts.length === 1 ? 0 : null
@@ -115,6 +122,13 @@ onBeforeUnmount(() => {
       <div class="ledger-sheet">
         <img :key="token" :src="preview" class="image-preview" :alt="t('billImage.preview')" @load="imageState = 'ready'" @error="imageState = 'error'" />
         <p v-if="imageState === 'error'" class="ledger-error" role="alert">{{ t('billImage.previewError') }}</p>
+        <label v-if="data?.platforms.length" class="ledger-field">
+          <span>{{ t('forms.platform') }}</span>
+          <select v-model="selectedPlatformId" :disabled="choosing || pending">
+            <option value="">{{ t('billImage.autoPlatform') }}</option>
+            <option v-for="platform in data.platforms" :key="platform.id" :value="platform.id">{{ platform.name }}</option>
+          </select>
+        </label>
         <p>{{ t('billImage.consent') }}</p>
         <p v-if="pending" role="status">{{ t('billImage.pending') }}</p>
         <p v-if="error" class="ledger-error" role="alert">{{ error }} <RouterLink :to="{ name: 'settings-ai' }">{{ t('billImage.settings') }}</RouterLink></p>
@@ -138,7 +152,7 @@ onBeforeUnmount(() => {
           {{ t('billImage.recognizedBalance', { amount: formatMoney(current.draft.amountCents) }) }}
         </p>
         <p v-if="estimateAmountsConflict(current.draft)" class="ledger-error" role="status">{{ t('billImage.amountConflict') }}</p>
-        <BillForm :key="editing" :platforms="data.platforms" :initial-draft="current.draft" :month="month"
+        <BillForm :key="editing" :platforms="data.platforms" :initial-draft="current.draft" :initial-platform-id="selectedPlatformId" :month="month"
           :busy="writing" :entry="null" review @cancel="skip" @submit="save" />
       </template>
       <div v-else class="ledger-sheet">

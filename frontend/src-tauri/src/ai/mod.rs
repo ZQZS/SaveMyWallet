@@ -79,19 +79,36 @@ pub(crate) async fn ai_recognize(
     images: State<'_, images::SelectedImage>,
     request_id: String,
     image_token: String,
+    platform_name: Option<String>,
 ) -> Result<Value, String> {
+    let platform = platform_name
+        .as_deref()
+        .map(crate::ledger::platform_name)
+        .transpose()
+        .map_err(|_| "AI_INVALID_INPUT")?
+        .map(str::to_owned);
     let image = images.data_url(&image_token)?;
     requests
         .run(request_id, async move {
             let key = credentials::load(&app)?;
-            recognize(&DeepSeek::official()?, &key, image).await
+            recognize(&DeepSeek::official()?, &key, image, platform.as_deref()).await
         })
         .await
 }
 
-async fn recognize(provider: &DeepSeek, key: &str, image: String) -> Result<Value, String> {
+async fn recognize(
+    provider: &DeepSeek,
+    key: &str,
+    image: String,
+    platform: Option<&str>,
+) -> Result<Value, String> {
+    let instruction = "请读取这张账单截图，按约定的 JSON 格式生成待核对的草稿。";
+    let text = match platform {
+        Some(name) => format!("{instruction}\n{}", json!({ "selectedPlatform": name })),
+        None => instruction.to_owned(),
+    };
     let input = json!([
-        {"type": "text", "text": "请读取这张账单截图，按约定的 JSON 格式生成待核对的草稿。"},
+        {"type": "text", "text": text},
         {"type": "image_url", "image_url": {"url": image, "detail": "high"}}
     ]);
     let reply = provider

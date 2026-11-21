@@ -1,4 +1,4 @@
-import { isMonth, MAX_AMOUNT_CENTS, type BillKind } from '../../domain/ledger.ts'
+import { isMonth, MAX_AMOUNT_CENTS, type BillKind, type Platform } from '../../domain/ledger.ts'
 
 /** Unreviewed model output. Amount means each period's payable amount for an installment. */
 export interface RecognizedBillDraft {
@@ -10,6 +10,12 @@ export interface RecognizedBillDraft {
   depositCents?: number | null
   kind: BillKind | null
   installmentCount: number | null
+}
+
+export function draftPlatformId(platforms: Platform[], hint?: string | null, selectedId?: string): string {
+  if (selectedId && platforms.some(platform => platform.id === selectedId)) return selectedId
+  const name = hint?.trim().toLowerCase()
+  return platforms.find(platform => platform.name.toLowerCase() === name)?.id ?? ''
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

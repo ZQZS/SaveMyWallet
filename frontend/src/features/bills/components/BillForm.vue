@@ -4,13 +4,13 @@ import { ArrowLeft, CalendarDays } from 'lucide-vue-next'
 import { t, formatMoney, formatMonth } from '../../../i18n'
 import { estimateTotalCents, isMonth, MAX_MONTH, MIN_MONTH, shiftMonth } from '../../../domain/ledger'
 import type { BillInput, Entry, Platform } from '../../../domain/ledger'
-import type { RecognizedBillDraft } from '../../../integrations/ai/visionDrafts'
+import { draftPlatformId, type RecognizedBillDraft } from '../../../integrations/ai/visionDrafts'
 import PlatformPicker from '../../platforms/components/PlatformPicker.vue'
 import { readBillAmounts } from '../billAmounts'
 
 const props = defineProps<{
   platforms: Platform[]; month: string; entry: Entry | null; busy: boolean
-  initialDraft?: Partial<RecognizedBillDraft>; review?: boolean
+  initialDraft?: Partial<RecognizedBillDraft>; initialPlatformId?: string; review?: boolean
 }>()
 const emit = defineEmits<{
   submit: [input: BillInput]
@@ -42,10 +42,10 @@ const lastMonth = computed(() => {
 watch([() => props.entry?.id, () => props.month, () => props.initialDraft], () => {
   const entry = props.entry
   const draft = props.initialDraft
-  const matched = draft && props.platforms.find(platform =>
-    platform.name.toLowerCase() === draft.platformHint?.trim().toLowerCase())
   kind.value = entry?.kind ?? (draft ? draft.kind ?? '' : 'single')
-  platformId.value = entry?.platformId ?? (draft ? matched?.id : props.platforms[0]?.id) ?? ''
+  platformId.value = entry?.platformId ?? (draft
+    ? draftPlatformId(props.platforms, draft.platformHint, props.initialPlatformId)
+    : props.platforms[0]?.id ?? '')
   title.value = entry?.title ?? draft?.title ?? ''
   const cents = entry?.amountCents ?? draft?.amountCents
   amount.value = cents == null ? '' : String(cents / 100)
