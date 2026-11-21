@@ -131,6 +131,7 @@ fn bill_drafts(reply: &str) -> Result<Value, String> {
                     "platformHint"
                         | "title"
                         | "month"
+                        | "repaymentTimeText"
                         | "amountCents"
                         | "totalCents"
                         | "depositCents"
@@ -215,6 +216,20 @@ mod tests {
         for bad in [" ", "{}", "[]", "42", r#"{"drafts":[1]}"#, r#"{"drafts":["#] {
             assert_eq!(bill_drafts(bad).unwrap_err(), "AI_BAD_RESPONSE");
         }
+    }
+
+    #[test]
+    fn screenshots_keep_each_bills_repayment_time_even_if_month_is_missing() {
+        let expected = json!({"drafts": [
+            {"title": "画册", "month": null, "repaymentTimeText": "预计2026.11到货补款"},
+            {"title": "徽章", "month": null, "repaymentTimeText": "预计2027.01到货补款"},
+            {"title": "模型", "month": null, "repaymentTimeText": "预计2027.03到货补款"}
+        ]});
+        let mut reply = expected.clone();
+        reply["drafts"][0]["purchaseTimeText"] = json!("2026.09 下单");
+        reply["drafts"][1]["orderId"] = json!("synthetic-order");
+        reply["drafts"][2]["status"] = json!("paid");
+        assert_eq!(bill_drafts(&reply.to_string()).unwrap(), expected);
     }
 
     #[test]

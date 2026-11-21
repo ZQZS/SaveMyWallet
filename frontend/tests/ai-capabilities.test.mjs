@@ -41,6 +41,31 @@ test('识图草稿优先使用手选的平台 ID，自动识别按截图中的�
   assert.equal(draftPlatformId([], null, 'removed'), '')
 })
 
+test('待开补款列表逐笔读取卡片的到货补款月份', () => {
+  const rows = [
+    { title: '合成商品甲', month: '2026.11' },
+    { title: '合成商品乙', month: null, repaymentTimeText: '已付定金¥10.00，预计2026.11到货补款' },
+    { title: '合成商品丙', month: '2026-11', repaymentTimeText: '预计2026.11到货补款' },
+    { title: '次年补款', month: null, repaymentTimeText: '预计2027.01到货补款' },
+    { title: '未公布补款时间', month: null },
+  ]
+  const drafts = readBillDrafts({ drafts: rows.map(row => ({ ...row, kind: 'estimate' })) })
+  assert.deepEqual(drafts.map(row => row.month), ['2026-11', '2026-11', '2026-11', '2027-01', null])
+})
+
+test('识图金额和其他订单日期不充当还款月份，明确的还款日期按月归一化', () => {
+  const month = value => readBillDrafts({ drafts: [{ month: value }] })[0].month
+  for (const value of [' 2027-2 ', '2027/2/18', '2027年2月18日', '2027-02-18 12:00:00']) {
+    assert.equal(month(value), '2027-02')
+  }
+  assert.equal(month(2026.11), '2026-11')
+  assert.equal(month('2028年2月29日'), '2028-02')
+  for (const value of [2026.1, '73.20', '11月', '下月', '2027-02-29', '2027-2-0', '2100.01',
+    '预计2026.11到货', '购买日期：2026-11-21', '预计2026.11至2026.12到货补款']) {
+    assert.equal(month(value), null, String(value))
+  }
+})
+
 test('截图中的尾款、总价和已付定金独立识别，有两项依据时补全金额', () => {
   const estimate = fields => readBillDrafts({ drafts: [{ kind: 'estimate', ...fields }] })[0]
   const values = draft => [draft.totalCents, draft.depositCents, draft.amountCents]

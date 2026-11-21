@@ -26,6 +26,29 @@ function readText(value: unknown): string | null {
   return typeof value === 'string' ? value.trim() || null : null
 }
 
+function readRepaymentMonth(value: unknown): string | null {
+  // A numeric 2026.11 is unambiguous, but JSON turns both 2026.1 and 2026.10 into 2026.1.
+  const text = typeof value === 'number' && /^\d{4}\.\d{2}$/.test(String(value)) ? String(value) : readText(value)
+  if (!text) return null
+  const date = text.normalize('NFKC')
+    .replace(/^(?:已付定金[^,]*,\s*)?预计\s*/, '')
+    .replace(/^(?:首期还款|尾款支付|还款|补款)(?:时间|日期|月份)?\s*:?\s*/, '')
+    .replace(/\s*到货(?:后)?补款$/, '')
+    .trim()
+    .replace(/(?:T|\s+)(?:[01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/, '')
+  const parts = /^(\d{4})\s*年\s*(\d{1,2})\s*月(?:\s*(\d{1,2})\s*[日号])?$/.exec(date)
+    ?? /^(\d{4})-(\d{1,2})(?:-(\d{1,2}))?$/.exec(date.replace(/[./]/g, '-'))
+  if (!parts) return null
+  const [, year, month, day] = parts
+  const result = `${year}-${month.padStart(2, '0')}`
+  if (!isMonth(result)) return null
+  if (day) {
+    const daysInMonth = new Date(Date.UTC(Number(year), Number(month), 0)).getUTCDate()
+    if (Number(day) < 1 || Number(day) > daysInMonth) return null
+  }
+  return result
+}
+
 function readInteger(value: unknown, minimum: number, maximum: number): number | null {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= minimum && value <= maximum ? value : null
 }
@@ -62,7 +85,7 @@ export function readBillDrafts(response: unknown): RecognizedBillDraft[] {
     return {
       platformHint: readText(row.platformHint),
       title: readText(row.title),
-      month: typeof row.month === 'string' && isMonth(row.month) ? row.month : null,
+      month: readRepaymentMonth(row.repaymentTimeText) ?? readRepaymentMonth(row.month),
       amountCents,
       ...(kind === 'estimate' ? readEstimateAmounts(row, amountCents) : {}),
       kind,
