@@ -12,7 +12,7 @@ import SettingsPageFrame from './SettingsPageFrame.vue'
       </div>
       <div>
         <dt>{{ t('settings.author.message') }}</dt>
-        <dd>主要是方便记录B站的会员购，后面想着，既然都做了，那把花呗也做了吧</dd>
+        <dd>主要是方便记录B站的会员购，后面想着，既然都做了，那把花呗也做了吧，那做都做了，那就......</dd>
       </div>
       <div>
         <dt>{{ t('settings.author.contact') }}</dt>
