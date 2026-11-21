@@ -1,20 +1,13 @@
 <script setup lang="ts">
-import { computed } from 'vue'
 import { t } from '../../i18n'
 import { ChevronRight, Plus, Wallet } from 'lucide-vue-next'
 import { useLedgerSession } from '../../app/ledgerSession'
+import PlatformSummary from './components/PlatformSummary.vue'
 import { usePlatformCreation } from './usePlatformCreation'
 import '../../shared/styles/ledger-forms.css'
 
-const { data: ledger, busy } = useLedgerSession()
+const { data: ledger, platformSummaries, busy } = useLedgerSession()
 const { name, errorKey, submit } = usePlatformCreation()
-const counts = computed(() => {
-  const byPlatform = new Map<string, number>()
-  for (const entry of ledger.value?.entries ?? []) {
-    byPlatform.set(entry.platformId, (byPlatform.get(entry.platformId) ?? 0) + 1)
-  }
-  return byPlatform
-})
 </script>
 
 <template>
@@ -30,14 +23,15 @@ const counts = computed(() => {
       <p v-if="errorKey" class="ledger-error" role="alert">{{ t(errorKey) }}</p>
     </form>
     <section class="ledger-sheet ledger-platform-list" aria-labelledby="added-platforms">
-      <div class="ledger-list-title"><h2 id="added-platforms">{{ t('forms.addedPlatforms') }}</h2><span>{{ t('forms.numberOfPlatforms', { count: ledger.platforms.length }) }}</span></div>
-      <ul v-if="ledger.platforms.length">
-        <li v-for="platform in ledger.platforms" :key="platform.id">
-          <RouterLink class="platform-link" :to="{ name: 'platform-details', params: { id: platform.id } }">
+      <div class="ledger-list-title"><h2 id="added-platforms">{{ t('forms.allMonthsSummary') }}</h2><span>{{ t('forms.numberOfPlatforms', { count: ledger.platforms.length }) }}</span></div>
+      <ul v-if="platformSummaries?.size">
+        <li v-for="summary in platformSummaries.values()" :key="summary.platform.id">
+          <RouterLink class="platform-link" :to="{ name: 'platform-details', params: { id: summary.platform.id } }">
             <span class="ledger-platform-symbol" aria-hidden="true"><Wallet :size="17" /></span>
-            <strong>{{ platform.name }}</strong><span>{{ t('forms.entryCount', { count: counts.get(platform.id) ?? 0 }) }}</span>
+            <h3>{{ summary.platform.name }}</h3>
             <ChevronRight :size="16" aria-hidden="true" />
           </RouterLink>
+          <PlatformSummary :summary="summary" />
         </li>
       </ul>
       <p v-else class="ledger-hint">{{ t('forms.platformsEmpty') }}</p>

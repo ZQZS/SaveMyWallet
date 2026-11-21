@@ -7,12 +7,13 @@ import type { Entry } from '../../domain/ledger'
 import { formatMoney, formatMonth, t } from '../../i18n'
 import BillEntryDescription from '../../shared/components/BillEntryDescription.vue'
 import { entryStatusLabel } from '../../shared/entryStatusLabel'
+import PlatformSummary from './components/PlatformSummary.vue'
 import '../../shared/styles/ledger-forms.css'
 
 const props = defineProps<{ id: string }>()
-const { data: ledger } = useLedgerSession()
+const { data: ledger, platformSummaries } = useLedgerSession()
 const router = useRouter()
-const platform = computed(() => ledger.value?.platforms.find(item => item.id === props.id))
+const summary = computed(() => platformSummaries.value?.get(props.id))
 const months = computed(() => {
   const groups = new Map<string, Entry[]>()
   for (const entry of ledger.value?.entries ?? []) {
@@ -37,9 +38,13 @@ function backToPlatforms() {
       <button type="button" class="ledger-back" :aria-label="t('forms.backToPlatforms')" :title="t('forms.backToPlatforms')" @click="backToPlatforms">
         <ArrowLeft :size="20" aria-hidden="true" />
       </button>
-      <h1 id="platform-detail-heading">{{ platform ? t('ledger.detailsFor', { name: platform.name }) : t('forms.platformNotFound') }}</h1>
+      <h1 id="platform-detail-heading">{{ summary ? t('ledger.detailsFor', { name: summary.platform.name }) : t('forms.platformNotFound') }}</h1>
     </header>
-    <template v-if="platform">
+    <template v-if="summary">
+      <section class="ledger-sheet" aria-labelledby="platform-summary-heading">
+        <h2 id="platform-summary-heading">{{ t('forms.allMonthsSummary') }}</h2>
+        <PlatformSummary :summary="summary" />
+      </section>
       <p v-if="!months.length" class="ledger-sheet ledger-hint">{{ t('forms.platformBillsEmpty') }}</p>
       <section v-for="[month, entries] in months" :key="month" class="ledger-sheet month-group" :aria-labelledby="'platform-month-' + month">
         <header class="ledger-list-title">

@@ -2,6 +2,7 @@ import { readonly, ref } from 'vue'
 import { appMessages } from './messages/app.ts'
 import { formsMessages } from './messages/forms.ts'
 import { ledgerMessages } from './messages/ledger.ts'
+import { statisticsMessages } from './messages/statistics.ts'
 import { settingsMessages } from './messages/settings.ts'
 import { aiErrorMessages } from './messages/aiErrors.ts'
 import { aiMonthMessages } from './messages/aiMonth.ts'
@@ -21,9 +22,11 @@ const preferenceKey = 'savemywallet.locale'
 
 const catalogs: Record<AppLocale, Record<string, string>> = {
   'zh-CN': { ...appMessages['zh-CN'], ...formsMessages['zh-CN'], ...ledgerMessages['zh-CN'], ...settingsMessages['zh-CN'],
+    ...statisticsMessages['zh-CN'],
     ...aiErrorMessages['zh-CN'], ...aiMonthMessages['zh-CN'], ...billImageMessages['zh-CN'],
     ...ledgerSearchMessages['zh-CN'], ...noticeMessages['zh-CN'], ...petsLedgerMessages['zh-CN'], ...petsPickerMessages['zh-CN'], ...petsChatMessages['zh-CN'] },
   'en-US': { ...appMessages['en-US'], ...formsMessages['en-US'], ...ledgerMessages['en-US'], ...settingsMessages['en-US'],
+    ...statisticsMessages['en-US'],
     ...aiErrorMessages['en-US'], ...aiMonthMessages['en-US'], ...billImageMessages['en-US'],
     ...ledgerSearchMessages['en-US'], ...noticeMessages['en-US'], ...petsLedgerMessages['en-US'], ...petsPickerMessages['en-US'], ...petsChatMessages['en-US'] },
 }

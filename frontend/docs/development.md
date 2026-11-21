@@ -30,6 +30,7 @@ Windows 和安卓共用 Vue、TypeScript、Tauri 2 和 Rust 代码，每台设�
 | `src/features/ledger/` | 月度首页、平台分组及展开明细、勾选与撤销、下月预览。 |
 | `src/features/bills/` | 录入单次还款、分期或预计补款，按明细 ID 打开并确认原单。 |
 | `src/features/platforms/` | 管理动态平台。账单表单与管理页共用新增逻辑和平台数据。 |
+| `src/features/statistics/` | 按截至月份汇总最近 6 或 12 个月的工资、应还和预计结余。支出、结余和平台占比图共用月度账本的计算结果，选中月份后可进入对应账本。 |
 | `src/features/budget/` | 编辑默认工资、当前月工资覆盖和结余警告线，预览应用新设置后的结余。 |
 | `src/features/settings/` | 设置首页按通用、账本数据和扩展配置分组。子页在 `settingsRoutes.ts` 注册。[备份页面](../src/features/settings/BackupSettingsPage.vue)协调系统选择器、预览与确认。 |
 | `src/i18n/` | 本机语言偏好、参数插值、人民币和月份格式化、可展示的原生错误。在 `messages/` 中为简中与英文提供相同键与参数。 |

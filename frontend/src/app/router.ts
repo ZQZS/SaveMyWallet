@@ -20,6 +20,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/bills/:id/confirm', name: 'bill-confirm', component: BillPage, meta: { menu: 'ledger' } },
   { path: '/platforms', name: 'platforms', component: PlatformsPage, meta: { menu: 'platforms' } },
   { path: '/platforms/:id', name: 'platform-details', component: () => import('../features/platforms/PlatformDetailsPage.vue'), props: true, meta: { menu: 'platforms' } },
+  { path: '/statistics', name: 'statistics', component: () => import('../features/statistics/StatisticsPage.vue'), meta: { menu: 'statistics' } },
   { path: '/budget', name: 'budget', component: BudgetPage, meta: { menu: 'budget' } },
   { path: '/settings', meta: { menu: 'settings' }, children: settingsRoutes },
   { path: '/:pathMatch(.*)*', redirect: { name: 'ledger' } },
@@ -29,8 +30,11 @@ export function createAppRouter(session: LedgerSession) {
   const router = createRouter({
     history: createWebHashHistory(),
     routes,
-    scrollBehavior: (to, _from, saved) =>
-      to.name === 'ledger' && typeof to.query.entry === 'string' ? false : saved ?? { top: 0 },
+    scrollBehavior: (to, from, saved) => {
+      if (to.name === 'ledger' && typeof to.query.entry === 'string') return false
+      if (to.name === 'statistics' && from.name === 'statistics') return false
+      return saved ?? { top: 0 }
+    },
   })
   router.beforeEach((_to, from) => {
     if (from.name && (session.busy.value || session.needsReload.value)) return false

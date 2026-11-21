@@ -11,7 +11,10 @@ import { locale, t } from './i18n'
 
 const session = createLedgerSession({ repository: sqliteRepository, calculateMonth: summarize })
 const router = createAppRouter(session)
-const canRefresh = () => router.currentRoute.value.name === 'ledger' || router.currentRoute.value.meta.menu === 'settings'
+const canRefresh = () => {
+  const route = router.currentRoute.value
+  return route.name === 'ledger' || route.name === 'statistics' || route.meta.menu === 'settings'
+}
 const sync = createSyncSession(invoke, session, canRefresh)
 const app = createApp(App)
 app.provide(ledgerSessionKey, session)

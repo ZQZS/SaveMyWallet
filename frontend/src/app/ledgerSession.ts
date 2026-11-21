@@ -1,6 +1,6 @@
-import { inject, ref, shallowRef, type InjectionKey } from 'vue'
+import { computed, inject, ref, shallowRef, type InjectionKey } from 'vue'
 import type { LedgerRepository } from '../data/repository'
-import { currentMonth, isMonth, type LedgerData, type summarize } from '../domain/ledger.ts'
+import { currentMonth, isMonth, summarizePlatforms, type LedgerData, type summarize } from '../domain/ledger.ts'
 import { displayError, t } from '../i18n/index.ts'
 
 interface LedgerServices {
@@ -16,6 +16,7 @@ interface PaymentChange {
 
 export function createLedgerSession({ repository, calculateMonth }: LedgerServices) {
   const data = shallowRef<LedgerData | null>(null)
+  const platformSummaries = computed(() => data.value ? summarizePlatforms(data.value) : null)
   const month = ref(currentMonth())
   const busy = ref(false)
   const needsReload = ref(false)
@@ -73,7 +74,7 @@ export function createLedgerSession({ repository, calculateMonth }: LedgerServic
     await readSnapshot()
   }
 
-  return { repository, calculateMonth, data, month, busy, needsReload, writeCount, error, notice, lastPayment, selectMonth, retryRead, commit }
+  return { repository, calculateMonth, data, platformSummaries, month, busy, needsReload, writeCount, error, notice, lastPayment, selectMonth, retryRead, commit }
 }
 
 export type LedgerSession = ReturnType<typeof createLedgerSession>

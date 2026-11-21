@@ -130,6 +130,41 @@ interface Amounts {
   estimated: number
 }
 
+function addEntryAmount(amounts: Amounts, entry: Entry): void {
+  if (entry.voided) return
+  amounts.total += entry.amountCents
+  amounts[entry.status] += entry.amountCents
+}
+
+export interface PlatformSummary extends Amounts {
+  platform: Platform
+  entryCount: number
+  paidCount: number
+  dueCount: number
+  estimatedCount: number
+  voidedCount: number
+}
+
+export function summarizePlatforms(ledger: LedgerData): Map<string, PlatformSummary> {
+  const summaries = new Map<string, PlatformSummary>()
+  for (const platform of ledger.platforms) {
+    summaries.set(platform.id, {
+      platform,
+      total: 0, paid: 0, due: 0, estimated: 0,
+      entryCount: 0, paidCount: 0, dueCount: 0, estimatedCount: 0, voidedCount: 0,
+    })
+  }
+  for (const entry of ledger.entries) {
+    const summary = summaries.get(entry.platformId)
+    if (!summary) continue
+    summary.entryCount++
+    const status = entry.voided ? 'voided' : entry.status
+    summary[`${status}Count`]++
+    addEntryAmount(summary, entry)
+  }
+  return summaries
+}
+
 export interface PlatformGroup extends Amounts {
   platform: Platform
   entries: Entry[]
@@ -156,11 +191,7 @@ export function summarize(ledger: LedgerData, month: string): MonthlySummary {
     const entries = entriesByPlatform.get(platform.id)
     if (!entries) continue
     const group: PlatformGroup = { platform, entries, total: 0, due: 0, paid: 0, estimated: 0 }
-    for (const entry of entries) {
-      if (entry.voided) continue
-      group.total += entry.amountCents
-      group[entry.status] += entry.amountCents
-    }
+    for (const entry of entries) addEntryAmount(group, entry)
     for (const bucket of ['total', 'due', 'paid', 'estimated'] as const) summary[bucket] += group[bucket]
     summary.groups.push(group)
   }

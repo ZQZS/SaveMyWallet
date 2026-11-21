@@ -22,7 +22,7 @@ const { busy, needsReload } = useLedgerSession()
 </template>
 
 <style scoped>
-.desktop-nav { display: flex; gap: 24px; align-self: stretch; }
+.desktop-nav { display: flex; gap: clamp(10px, 1.8vw, 24px); align-self: stretch; }
 button { border: 0; border-radius: 0; background: transparent; color: var(--sub); font-weight: 550; font-size: 14px; }
 .desktop-nav button { position: relative; padding: 0 2px; }
 button[aria-current="page"] { color: var(--green); font-weight: 700; }
@@ -31,6 +31,6 @@ button[aria-current="page"] { color: var(--green); font-weight: 700; }
 @media (max-width: 860px) {
   .desktop-nav { display: none; }
   .mobile-nav { display: flex; position: fixed; inset: auto 0 0; z-index: 5; border-top: 1px solid var(--line); background: var(--surface); padding: 3px 6px calc(4px + env(safe-area-inset-bottom)); }
-  .mobile-nav button { display: grid; gap: 3px; justify-items: center; align-content: center; min-height: 52px; flex: 1; font-size: 12px; }
+  .mobile-nav button { display: grid; gap: 3px; justify-items: center; align-content: center; min-height: 52px; min-width: 0; padding: 2px; flex: 1; font-size: 12px; }
 }
 </style>

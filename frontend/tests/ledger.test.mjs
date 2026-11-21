@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { currentMonth, estimateTotalCents, installmentPeriods, isMonth, shiftMonth, summarize, toCents } from '../src/domain/ledger.ts'
+import { currentMonth, estimateTotalCents, installmentPeriods, isMonth, shiftMonth, summarize, summarizePlatforms, toCents } from '../src/domain/ledger.ts'
 
 const platform = { id: 'custom-id', name: '新增平台' }
 const current = '2026-12'
@@ -48,6 +48,36 @@ test('月度预测按动态平台合并，仅计目标月份，并把预估纳�
   const next = summarize(ledger, shiftMonth(current, 1))
   assert.equal(next.salary, 800000)
   assert.ok(next.balance < ledger.settings.warningFloorCents)
+})
+
+test('各平台按全部月份汇总实际分期、已还、待还和待确认笔数及金额', () => {
+  const first = { ...entry('分期一', 1250, 'paid'), kind: 'installment', installmentIndex: 1, installmentCount: 2 }
+  const second = { ...first, id: '分期二', month: '2027-01', status: 'due', installmentIndex: 2 }
+  const ledger = book([
+    first, second,
+    { ...entry('尾款', 800, 'estimated'), depositCents: 200 },
+    { ...entry('预付结清', 0, 'paid'), kind: 'estimate', depositCents: 999 },
+    { ...entry('作废', 9999, 'due'), voided: true },
+    { ...entry('另一平台', 20, 'due'), platformId: 'other' },
+  ])
+  const other = { id: 'other', name: '另一平台' }
+  ledger.platforms.push(other)
+  const summaries = summarizePlatforms(ledger)
+  assert.deepEqual(summaries.get(platform.id), {
+    platform,
+    total: 3300, paid: 1250, due: 1250, estimated: 800,
+    entryCount: 5, paidCount: 2, dueCount: 1, estimatedCount: 1, voidedCount: 1,
+  })
+  assert.deepEqual(summaries.get('other'), {
+    platform: other,
+    total: 20, paid: 0, due: 20, estimated: 0,
+    entryCount: 1, paidCount: 0, dueCount: 1, estimatedCount: 0, voidedCount: 0,
+  })
+  assert.deepEqual(summaries.get('unused'), {
+    platform: ledger.platforms[1],
+    total: 0, paid: 0, due: 0, estimated: 0,
+    entryCount: 0, paidCount: 0, dueCount: 0, estimatedCount: 0, voidedCount: 0,
+  })
 })
 
 test('还款勾选只减少待还，补录后已还与待还并存', () => {
