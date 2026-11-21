@@ -1,4 +1,4 @@
-import { isMonth, MAX_AMOUNT_CENTS, type BillKind, type Platform } from '../../domain/ledger.ts'
+import { isMonth, MAX_AMOUNT_CENTS, shiftMonth, type BillKind, type Platform } from '../../domain/ledger.ts'
 
 /** Unreviewed model output. Amount means each period's payable amount for an installment. */
 export interface RecognizedBillDraft {
@@ -53,6 +53,26 @@ function readInteger(value: unknown, minimum: number, maximum: number): number |
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= minimum && value <= maximum ? value : null
 }
 
+function readStatementMonth(label: string, referenceMonth?: string): string | null {
+  const date = label.normalize('NFKC').trim()
+    .replace(/^(?:账单月份?|还款日(?:期)?)\s*:?\s*/, '')
+    .replace(/\s*(?:总计)?账单$/, '')
+    .trim()
+  const fullMonth = readRepaymentMonth(date)
+  if (fullMonth) return fullMonth
+
+  const yearless = /^(\d{1,2})月(?:\s*\d{1,2}[日号])?$/.exec(date)
+  if (!yearless || !referenceMonth || !isMonth(referenceMonth)) return null
+  const month = yearless[1].padStart(2, '0')
+  for (const offset of [-1, 0, 1]) {
+    const candidate = shiftMonth(referenceMonth, offset)
+    if (isMonth(candidate) && candidate.slice(5) === month) {
+      return readRepaymentMonth(candidate.slice(0, 4) + '年' + date)
+    }
+  }
+  return null
+}
+
 function readEstimateAmounts(row: Record<string, unknown>, balance: number | null) {
   let totalCents = readInteger(row.totalCents, 1, MAX_AMOUNT_CENTS)
   let depositCents = readInteger(row.depositCents, 0, MAX_AMOUNT_CENTS)
@@ -74,18 +94,26 @@ export function estimateAmountsConflict(draft: RecognizedBillDraft): boolean {
 }
 
 /** Parse a provider's decoded JSON. Unknown fields never become ledger writes. */
-export function readBillDrafts(response: unknown): RecognizedBillDraft[] {
+export function readBillDrafts(response: unknown, referenceMonth?: string): RecognizedBillDraft[] {
   if (!isRecord(response) || !Array.isArray(response.drafts)) {
     throw new Error('识图响应缺少 drafts 数组。')
   }
-  return response.drafts.map((row: unknown, index: number) => {
+  return response.drafts.flatMap((row: unknown, index: number): RecognizedBillDraft | [] => {
     if (!isRecord(row)) throw new Error(`第 ${index + 1} 条识图草稿格式有误。`)
-    const kind = row.kind === 'single' || row.kind === 'installment' || row.kind === 'estimate' ? row.kind : null
+    const statementMonth = readText(row.statementMonthText)
+    const title = readText(row.title)
+    const billedPeriod = title && /^第\s*\d{1,3}\s*\/\s*\d{1,3}\s*期/.test(title.normalize('NFKC'))
+    // A billed period is one charge. Expanding it as a new plan would post other months too.
+    const isStatementLine = Boolean(statementMonth || billedPeriod)
+    if (isStatementLine && typeof row.amountCents === 'number' && row.amountCents < 0) return []
+    const recognizedKind = row.kind === 'single' || row.kind === 'installment' || row.kind === 'estimate' ? row.kind : null
+    const kind = isStatementLine ? 'single' : recognizedKind
     const amountCents = readInteger(row.amountCents, kind === 'estimate' ? 0 : 1, MAX_AMOUNT_CENTS)
     return {
       platformHint: readText(row.platformHint),
-      title: readText(row.title),
-      month: readRepaymentMonth(row.repaymentTimeText) ?? readRepaymentMonth(row.month),
+      title,
+      month: statementMonth ? readStatementMonth(statementMonth, referenceMonth)
+        : readRepaymentMonth(row.repaymentTimeText) ?? readRepaymentMonth(row.month),
       amountCents,
       ...(kind === 'estimate' ? readEstimateAmounts(row, amountCents) : {}),
       kind,

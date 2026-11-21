@@ -5,6 +5,9 @@ use tauri::{State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_fs::{FsExt, OpenOptions};
 
+mod bill_slices;
+pub(crate) use bill_slices::prepare_bill_images;
+
 const MAX_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Default)]

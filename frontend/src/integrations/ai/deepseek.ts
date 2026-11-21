@@ -87,10 +87,10 @@ export function parseLedgerSearch(message: string, referenceMonth: string, signa
   return request<LedgerSearchFilters & { supported: boolean }>('ai_parse_search', { message, referenceMonth }, signal)
 }
 
-export async function recognizeAiBills(imageToken: string, signal?: AbortSignal, platformName?: string) {
+export async function recognizeAiBills(imageToken: string, signal?: AbortSignal, platformName?: string, referenceMonth?: string) {
   const result = await request<unknown>('ai_recognize', { imageToken, platformName }, signal)
   try {
-    return readBillDrafts(result)
+    return readBillDrafts(result, referenceMonth)
   } catch {
     throw new Error('AI_BAD_RESPONSE')
   }

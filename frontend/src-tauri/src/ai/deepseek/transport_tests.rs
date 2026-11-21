@@ -56,7 +56,7 @@ fn synthetic_screenshot_reaches_chat_as_inline_image_and_returns_reviewable_draf
         let response = json!({"choices":[{"finish_reason":"stop","message":{"content":expected.to_string()}}]});
         let (provider, server) = fixture("200 OK", response);
         assert_eq!(
-            recognize(&provider, TEST_KEY, image.clone(), None)
+            recognize(&provider, TEST_KEY, vec![image.clone()], None)
                 .await
                 .unwrap(),
             expected
@@ -90,9 +90,14 @@ fn chosen_platform_is_user_context_and_keeps_recognized_platform_evidence() {
             json!({"choices":[{"finish_reason":"stop","message":{"content":drafts.to_string()}}]});
         let (provider, server) = fixture("200 OK", response);
         assert_eq!(
-            recognize(&provider, TEST_KEY, "fixture-image".into(), Some(chosen))
-                .await
-                .unwrap(),
+            recognize(
+                &provider,
+                TEST_KEY,
+                vec!["fixture-image".into()],
+                Some(chosen)
+            )
+            .await
+            .unwrap(),
             drafts
         );
         let (_, body) = server.join().unwrap();
@@ -105,6 +110,52 @@ fn chosen_platform_is_user_context_and_keeps_recognized_platform_evidence() {
             serde_json::from_str::<Value>(context).unwrap(),
             json!({"selectedPlatform": chosen})
         );
+    });
+}
+
+#[test]
+fn long_bill_sends_ordered_strips_together_and_returns_all_statement_rows() {
+    tauri::async_runtime::block_on(async {
+        let rows: Vec<_> = (1..=36)
+            .map(|n| {
+                json!({
+                    "title": format!("测试商品 {n}"), "statementMonthText": "12月总计账单",
+                    "kind": "single", "amountCents": 5900
+                })
+            })
+            .collect();
+        let expected = json!({"drafts": rows});
+        let response = json!({"choices":[{"finish_reason":"stop","message":{"content":expected.to_string()}}]});
+        let raster =
+            image::RgbImage::from_fn(320, 3200, |_, y| image::Rgb([(y / 16) as u8, 42, 64]));
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        raster
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .unwrap();
+        let selected = format!(
+            "data:image/png;base64,{}",
+            STANDARD.encode(bytes.into_inner())
+        );
+        let strips = crate::ai::images::prepare_bill_images(selected).unwrap();
+        assert!(strips.len() >= 3);
+        let (provider, server) = fixture("200 OK", response);
+        assert_eq!(
+            recognize(&provider, TEST_KEY, strips.clone(), Some("测试平台"))
+                .await
+                .unwrap(),
+            expected
+        );
+        let (_, body) = server.join().unwrap();
+        let request: Value = serde_json::from_slice(&body).unwrap();
+        assert!(request["max_tokens"].as_u64().unwrap() > 4096);
+        let content = request["messages"][1]["content"].as_array().unwrap();
+        assert_eq!(content.len(), strips.len() + 1);
+        assert!(content[0]["text"].as_str().unwrap().contains("测试平台"));
+        for (block, expected_url) in content[1..].iter().zip(strips) {
+            assert_eq!(block["type"], "image_url");
+            assert_eq!(block["image_url"]["url"], expected_url);
+            assert_eq!(block["image_url"]["detail"], "high");
+        }
     });
 }
 

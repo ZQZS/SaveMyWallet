@@ -10,11 +10,15 @@ use deepseek::DeepSeek;
 pub(crate) use requests::AiRequests;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::time::Duration;
 use tauri::{AppHandle, State};
+use tokio::sync::Semaphore;
 
 const REMINDER: &str = include_str!("../../../resources/ai/prompts/reminder.md");
 const VISION: &str = include_str!("../../../resources/ai/prompts/vision.md");
 const SCENARIO: &str = include_str!("../../../resources/ai/prompts/scenario.md");
+// An in-flight decoder finishes its current image even if the user cancels and selects another.
+static IMAGE_DECODER: Semaphore = Semaphore::const_new(1);
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -91,7 +95,24 @@ pub(crate) async fn ai_recognize(
     requests
         .run(request_id, async move {
             let key = credentials::load(&app)?;
-            recognize(&DeepSeek::official()?, &key, image, platform.as_deref()).await
+            let decoder_slot = IMAGE_DECODER
+                .acquire()
+                .await
+                .map_err(|_| "AI_UNAVAILABLE")?;
+            let strips = tokio::task::spawn_blocking(move || {
+                let _slot = decoder_slot;
+                images::prepare_bill_images(image)
+            })
+            .await
+            .map_err(|_| "AI_IMAGE_FORMAT")??;
+            let timeout = Duration::from_secs(if strips.len() > 1 { 240 } else { 60 });
+            recognize(
+                &DeepSeek::official_with_timeout(timeout)?,
+                &key,
+                strips,
+                platform.as_deref(),
+            )
+            .await
         })
         .await
 }
@@ -99,20 +120,27 @@ pub(crate) async fn ai_recognize(
 async fn recognize(
     provider: &DeepSeek,
     key: &str,
-    image: String,
+    strips: Vec<String>,
     platform: Option<&str>,
 ) -> Result<Value, String> {
-    let instruction = "请读取这张账单截图，按约定的 JSON 格式生成待核对的草稿。";
+    let instruction = if strips.len() > 1 {
+        "以下图片是同一张账单长截图从上到下的连续图段。请对齐相邻图段重叠的内容，按原图顺序输出全部明细，每个位置只录一次。"
+    } else {
+        "请读取这张账单截图，按约定的 JSON 格式生成待核对的草稿。"
+    };
     let text = match platform {
         Some(name) => format!("{instruction}\n{}", json!({ "selectedPlatform": name })),
         None => instruction.to_owned(),
     };
-    let input = json!([
-        {"type": "text", "text": text},
-        {"type": "image_url", "image_url": {"url": image, "detail": "high"}}
-    ]);
+    let max_tokens = (2048 * strips.len() as u32).clamp(4096, 16384);
+    let mut input = vec![json!({"type": "text", "text": text})];
+    for strip in strips {
+        let mut block = json!({"type": "image_url", "image_url": {"detail": "high"}});
+        block["image_url"]["url"] = Value::String(strip);
+        input.push(block);
+    }
     let reply = provider
-        .complete(key, VISION, input, "json_object", 4096)
+        .complete(key, VISION, Value::Array(input), "json_object", max_tokens)
         .await?;
     bill_drafts(&reply)
 }
@@ -132,6 +160,7 @@ fn bill_drafts(reply: &str) -> Result<Value, String> {
                         | "title"
                         | "month"
                         | "repaymentTimeText"
+                        | "statementMonthText"
                         | "amountCents"
                         | "totalCents"
                         | "depositCents"

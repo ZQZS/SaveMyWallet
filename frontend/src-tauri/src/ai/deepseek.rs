@@ -1,4 +1,5 @@
 use reqwest::{Client, RequestBuilder, StatusCode};
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::time::Duration;
 
@@ -47,11 +48,15 @@ fn completion_content(reply: &Value) -> Result<&str, String> {
 
 impl DeepSeek {
     pub(super) fn official() -> Result<Self, String> {
+        Self::official_with_timeout(Duration::from_secs(60))
+    }
+
+    pub(super) fn official_with_timeout(timeout: Duration) -> Result<Self, String> {
         let http = Client::builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(60))
+            .timeout(timeout)
             .build()
             .map_err(|_| "AI_NETWORK")?;
         Ok(Self {
@@ -83,10 +88,11 @@ impl DeepSeek {
         format: &str,
         max_tokens: u32,
     ) -> Result<String, String> {
-        let messages = [
+        let mut messages = [
             json!({"role": "system", "content": instruction}),
-            json!({"role": "user", "content": input}),
+            json!({"role": "user"}),
         ];
+        messages[1]["content"] = input;
         self.complete_messages(key, &messages, format, max_tokens)
             .await
     }
@@ -98,13 +104,22 @@ impl DeepSeek {
         format: &str,
         max_tokens: u32,
     ) -> Result<String, String> {
-        let body = json!({
-            "model": "deepseek-flash",
-            "thinking": {"type": "disabled"},
-            "response_format": {"type": format},
-            "max_tokens": max_tokens,
-            "messages": messages
-        });
+        // Serialize image data directly from the message blocks; long bills can contain many MiB.
+        #[derive(Serialize)]
+        struct CompletionBody<'a> {
+            model: &'static str,
+            thinking: Value,
+            response_format: Value,
+            max_tokens: u32,
+            messages: &'a [Value],
+        }
+        let body = CompletionBody {
+            model: "deepseek-flash",
+            thinking: json!({"type": "disabled"}),
+            response_format: json!({"type": format}),
+            max_tokens,
+            messages,
+        };
         let request = self.http.post(format!("{}/chat/completions", self.origin));
         let result = response_json(request.bearer_auth(key).json(&body)).await?;
         Ok(completion_content(&result)?.to_owned())

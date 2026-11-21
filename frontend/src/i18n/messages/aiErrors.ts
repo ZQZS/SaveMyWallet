@@ -14,6 +14,7 @@ export const aiErrorMessages = {
     'error.AI_UNAVAILABLE': '无法完成 AI 操作，请重新打开应用后重试。',
     'error.AI_IMAGE_EXPIRED': '请重新选择要识别的截图。',
     'error.AI_IMAGE_TOO_LARGE': '请选择不超过 8 MiB 的截图。',
+    'error.AI_IMAGE_DIMENSIONS': '这张截图尺寸过大，请裁成几张较短的截图后分别识别。',
     'error.AI_IMAGE_FORMAT': '请选择 PNG、JPEG 或 WebP 格式的截图。',
   },
   'en-US': {
@@ -31,6 +32,7 @@ export const aiErrorMessages = {
     'error.AI_UNAVAILABLE': 'The AI action failed. Reopen the app and try again.',
     'error.AI_IMAGE_EXPIRED': 'Choose the screenshot again.',
     'error.AI_IMAGE_TOO_LARGE': 'Choose a screenshot no larger than 8 MiB.',
+    'error.AI_IMAGE_DIMENSIONS': 'This screenshot is too large to process. Crop it into shorter images and import each one separately.',
     'error.AI_IMAGE_FORMAT': 'Choose a PNG, JPEG, or WebP screenshot.',
   },
 }

@@ -1,6 +1,6 @@
 [package]
 name = "save-my-wallet"
-version = "0.4.6"
+version = "0.4.7"
 description = "SaveMyWallet 本地月度账本"
 edition = "2021"
 
@@ -13,6 +13,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
 tokio = { version = "1", features = ["sync"] }
 rusqlite = { version = "0.37", features = ["bundled"] }

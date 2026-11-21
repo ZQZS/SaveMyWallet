@@ -66,6 +66,37 @@ test('识图金额和其他订单日期不充当还款月份，明确的还款�
   }
 })
 
+test('月账单逐行保留本期金额和期号，不展开已有分期，退款去向不改变本期', () => {
+  const statementMonthText = '12月总计账单'
+  const purchase = { title: '滤纸', amountCents: 1144, repaymentTimeText: '2026-11-11', statementMonthText }
+  const period = { kind: 'installment', title: '第2/3期 耳机', amountCents: 6103, installmentCount: 3,
+    month: '2027-01', repaymentTimeText: '已退至2027年1月账单', statementMonthText }
+  const drafts = readBillDrafts({ drafts: [purchase, purchase, period,
+    { ...period, title: '第3/3期 画册', amountCents: 700 }, { ...purchase, title: '退款', amountCents: -500 },
+  ] }, '2026-11')
+  assert.deepEqual(drafts.map(row => [row.title, row.amountCents, row.month, row.kind, row.installmentCount]), [
+    ['滤纸', 1144, '2026-12', 'single', null], ['滤纸', 1144, '2026-12', 'single', null],
+    ['第2/3期 耳机', 6103, '2026-12', 'single', null], ['第3/3期 画册', 700, '2026-12', 'single', null],
+  ])
+  const [withoutHeader] = readBillDrafts({ drafts: [{ kind: 'installment', title: '第１／３期 画册', installmentCount: 3 }] })
+  assert.equal(withoutHeader.kind, 'single')
+  assert.equal(withoutHeader.installmentCount, null)
+})
+
+test('账单缺年时只匹配选中月及相邻月份，跨年和明确的还款日均按日期校验', () => {
+  const month = (label, reference) =>
+    readBillDrafts({ drafts: [{ statementMonthText: label, month: '2026-11' }] }, reference)[0].month
+  assert.equal(month('1月总计账单', '2026-12'), '2027-01')
+  assert.equal(month('还款日12月8日', '2027-01'), '2026-12')
+  assert.equal(month('账单月份：2028年2月', '2026-11'), '2028-02')
+  assert.equal(month('还款日2月29日', '2028-01'), '2028-02')
+  assert.equal(month('还款日2月29日', '2027-01'), null)
+  assert.equal(month('7月账单', '2026-11'), null)
+  assert.equal(month('1月账单'), null)
+  assert.equal(month('1月账单', '2099-12'), null)
+  assert.equal(month('已退至2027年1月账单', '2026-12'), null)
+})
+
 test('截图中的尾款、总价和已付定金独立识别，有两项依据时补全金额', () => {
   const estimate = fields => readBillDrafts({ drafts: [{ kind: 'estimate', ...fields }] })[0]
   const values = draft => [draft.totalCents, draft.depositCents, draft.amountCents]

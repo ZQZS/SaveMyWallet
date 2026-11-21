@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ImagePlus } from 'lucide-vue-next'
 import { useLedgerSession } from '../../app/ledgerSession'
 import type { BillInput } from '../../domain/ledger'
-import { displayError, formatMoney, t } from '../../i18n'
+import { displayError, formatMoney, formatMonth, t } from '../../i18n'
 import { chooseAiImage, recognizeAiBills, releaseAiImage } from '../../integrations/ai/deepseek'
 import { estimateAmountsConflict, type RecognizedBillDraft } from '../../integrations/ai/visionDrafts'
 import BillForm from '../bills/components/BillForm.vue'
+import BillScreenshotPreview from './BillScreenshotPreview.vue'
 import { useAssistantRequest } from './useAssistantRequest'
 
 interface ReviewRow {
@@ -24,8 +25,21 @@ const imageState = ref<'loading' | 'ready' | 'error'>('loading')
 const pickerError = ref('')
 const rows = ref<ReviewRow[] | null>(null)
 const editing = ref<number | null>(null)
+const reviewHeading = ref<HTMLElement | null>(null)
+const draftPanel = ref<HTMLElement | null>(null)
 const current = computed(() => editing.value === null ? null : rows.value?.[editing.value])
 const saved = computed(() => rows.value?.filter(row => row.status === 'saved').length ?? 0)
+const detailTotal = computed(() => {
+  const items = rows.value
+  const statementMonth = items?.[0]?.draft.month
+  if (!items || items.length < 2 || !statementMonth) return null
+  let cents = 0
+  for (const { draft } of items) {
+    if (draft.kind !== 'single' || draft.month !== statementMonth || draft.amountCents === null) return null
+    cents += draft.amountCents
+  }
+  return Number.isSafeInteger(cents) ? cents : null
+})
 const writing = computed(() => busy.value || needsReload.value)
 let token = ''
 let mounted = true
@@ -79,10 +93,27 @@ async function choose() {
 function recognize() {
   if (!token || imageState.value !== 'ready' || choosing.value || pending.value || rows.value) return
   const platform = data.value?.platforms.find(platform => platform.id === selectedPlatformId.value)
-  void run(signal => recognizeAiBills(token, signal, platform?.name), drafts => {
+  void run(signal => recognizeAiBills(token, signal, platform?.name, month.value), drafts => {
     release()
     rows.value = drafts.map(draft => ({ draft, status: 'pending' }))
-    editing.value = drafts.length === 1 ? 0 : null
+    if (drafts.length === 1) edit(0)
+  })
+}
+
+function edit(index: number) {
+  editing.value = index
+  nextTick(() => reviewHeading.value?.focus())
+}
+
+function returnToList() {
+  const previous = editing.value ?? -1
+  const drafts = rows.value ?? []
+  let next = drafts.findIndex((row, index) => index > previous && row.status === 'pending')
+  if (next === -1) next = drafts.findIndex(row => row.status === 'pending')
+  editing.value = null
+  nextTick(() => {
+    const selector = next === -1 ? '.finish-review' : `[data-draft-index="${next}"]`
+    draftPanel.value?.querySelector<HTMLButtonElement>(selector)?.focus()
   })
 }
 
@@ -92,14 +123,17 @@ function save(input: BillInput) {
   return commit(() => repository.createBill(input), () => {
     row.status = 'saved'
     row.draft.title = input.title
-    editing.value = null
+    row.draft.kind = input.kind
+    row.draft.month = input.month
+    row.draft.amountCents = input.amountCents
+    returnToList()
   })
 }
 
 function skip() {
   if (current.value && !writing.value) {
     current.value.status = 'skipped'
-    editing.value = null
+    returnToList()
   }
 }
 
@@ -120,7 +154,7 @@ onBeforeUnmount(() => {
     <template v-else-if="rows === null">
       <h1>{{ t('billImage.open') }}</h1>
       <div class="ledger-sheet">
-        <img :key="token" :src="preview" class="image-preview" :alt="t('billImage.preview')" @load="imageState = 'ready'" @error="imageState = 'error'" />
+        <BillScreenshotPreview :key="token" :src="preview" @load="imageState = 'ready'" @error="imageState = 'error'" />
         <p v-if="imageState === 'error'" class="ledger-error" role="alert">{{ t('billImage.previewError') }}</p>
         <label v-if="data?.platforms.length" class="ledger-field">
           <span>{{ t('forms.platform') }}</span>
@@ -129,7 +163,7 @@ onBeforeUnmount(() => {
             <option v-for="platform in data.platforms" :key="platform.id" :value="platform.id">{{ platform.name }}</option>
           </select>
         </label>
-        <p>{{ t('billImage.consent') }}</p>
+        <p>{{ t('billImage.consent', { month: formatMonth(month) }) }}</p>
         <p v-if="pending" role="status">{{ t('billImage.pending') }}</p>
         <p v-if="error" class="ledger-error" role="alert">{{ error }} <RouterLink :to="{ name: 'settings-ai' }">{{ t('billImage.settings') }}</RouterLink></p>
         <div class="ledger-form-actions">
@@ -143,10 +177,10 @@ onBeforeUnmount(() => {
       <h1>{{ t('billImage.review') }}</h1>
       <details class="source-image">
         <summary>{{ t('billImage.source') }}</summary>
-        <img :src="preview" class="image-preview" :alt="t('billImage.preview')" />
+        <BillScreenshotPreview :src="preview" />
       </details>
       <template v-if="current && editing !== null && data">
-        <h2>{{ t('billImage.item', { index: editing + 1, count: rows.length }) }}</h2>
+        <h2 ref="reviewHeading" tabindex="-1">{{ t('billImage.item', { index: editing + 1, count: rows.length }) }}</h2>
         <p v-if="current.draft.platformHint" class="ledger-hint">{{ t('billImage.platformHint', { platform: current.draft.platformHint }) }}</p>
         <p v-if="current.draft.kind === 'estimate' && current.draft.amountCents !== null" class="ledger-hint">
           {{ t('billImage.recognizedBalance', { amount: formatMoney(current.draft.amountCents) }) }}
@@ -155,18 +189,27 @@ onBeforeUnmount(() => {
         <BillForm :key="editing" :platforms="data.platforms" :initial-draft="current.draft" :initial-platform-id="selectedPlatformId" :month="month"
           :busy="writing" :entry="null" review @cancel="skip" @submit="save" />
       </template>
-      <div v-else class="ledger-sheet">
-        <p role="status">{{ rows.length ? t('billImage.progress', { count: rows.length, saved }) : t('billImage.empty') }}</p>
+      <div v-else ref="draftPanel" class="ledger-sheet">
+        <div class="draft-progress">
+          <p role="status">{{ rows.length ? t('billImage.progress', { count: rows.length, saved }) : t('billImage.empty') }}</p>
+          <strong v-if="detailTotal !== null">{{ t('billImage.detailTotal', { amount: formatMoney(detailTotal) }) }}</strong>
+        </div>
         <ul v-if="rows.length" class="draft-list">
           <li v-for="(row, index) in rows" :key="index">
-            <div><strong>{{ row.draft.title || t('billImage.untitled') }}</strong>
-              <small v-if="row.status === 'skipped'">{{ t('billImage.skipped') }}</small></div>
+            <div>
+              <strong>{{ row.draft.title || t('billImage.untitled') }}</strong>
+              <small v-if="row.draft.month || row.draft.amountCents !== null" class="draft-facts">
+                <time v-if="row.draft.month" :datetime="row.draft.month">{{ formatMonth(row.draft.month) }}</time>
+                <span v-if="row.draft.amountCents !== null">{{ formatMoney(row.draft.amountCents) }}</span>
+              </small>
+              <small v-if="row.status === 'skipped'">{{ t('billImage.skipped') }}</small>
+            </div>
             <span v-if="row.status === 'saved'">{{ t('billImage.saved') }}</span>
-            <button v-else type="button" class="ledger-secondary" :disabled="writing" @click="editing = index">{{ t('billImage.edit') }}</button>
+            <button v-else type="button" class="ledger-secondary" :data-draft-index="index" :disabled="writing" @click="edit(index)">{{ t('billImage.edit') }}</button>
           </li>
         </ul>
         <div class="ledger-form-actions">
-          <button type="button" class="ledger-secondary" :disabled="writing" @click="close">{{ t('billImage.finish') }}</button>
+          <button type="button" class="ledger-secondary finish-review" :disabled="writing" @click="close">{{ t('billImage.finish') }}</button>
         </div>
       </div>
     </template>
@@ -177,12 +220,14 @@ onBeforeUnmount(() => {
 <style scoped>
 .image-import { margin-bottom: 16px; }
 .image-open { justify-self: end; }
-.image-preview { display: block; width: 100%; max-height: 52vh; object-fit: contain; border-radius: 8px; background: var(--soft); }
 .source-image { min-width: 0; }
 .source-image summary { width: fit-content; min-height: 36px; color: var(--green); cursor: pointer; }
+.draft-progress { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; }
+.draft-progress strong { font-variant-numeric: tabular-nums; }
 .draft-list { list-style: none; padding: 0; }
 .draft-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-block: 10px; border-bottom: 1px solid var(--line); }
 .draft-list li div { min-width: 0; overflow-wrap: anywhere; }
 .draft-list small { display: block; color: var(--sub); }
+.draft-list .draft-facts { display: flex; flex-wrap: wrap; gap: 2px 10px; font-variant-numeric: tabular-nums; }
 .draft-list button { flex: none; }
 </style>
