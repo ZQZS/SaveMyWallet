@@ -1,3 +1,4 @@
+import type { Entry, Platform } from '../../domain/ledger.ts'
 import type { StatisticsMonth } from './statistics.ts'
 
 const spendingCategories = [
@@ -10,49 +11,39 @@ interface SpendingTotals {
   count: number
 }
 
-interface TitleSpending extends SpendingTotals {
-  title: string
+export interface CategorySpendingDetail {
+  entry: Entry
+  platform: Platform
 }
 
 export interface CategorySpendingInput extends SpendingTotals {
-  items: TitleSpending[]
-  unclassified: SpendingTotals
+  titles: string[]
+  details: CategorySpendingDetail[]
 }
 
 export interface CategorySpendingRow extends SpendingTotals {
   category: SpendingCategory
   share: number
+  details: CategorySpendingDetail[]
 }
 
 export function prepareCategorySpending(months: readonly StatisticsMonth[]): CategorySpendingInput {
-  const byTitle = new Map<string, TitleSpending>()
-  const unclassified = { amountCents: 0, count: 0 }
+  const titles = new Set<string>()
+  const details: CategorySpendingDetail[] = []
   let amountCents = 0
-  let count = 0
   for (const month of months) {
     for (const group of month.groups) {
       for (const entry of group.entries) {
         if (entry.voided) continue
+        details.push({ entry, platform: group.platform })
         amountCents += entry.amountCents
-        count++
         const title = entry.title.trim()
-        // Keep unusable legacy titles in the local totals without sending a truncated or invented title.
-        if (!title || title.includes('\0') || Array.from(title).length > 120) {
-          unclassified.amountCents += entry.amountCents
-          unclassified.count++
-          continue
-        }
-        const item = byTitle.get(title)
-        if (item) {
-          item.amountCents += entry.amountCents
-          item.count++
-        } else {
-          byTitle.set(title, { title, amountCents: entry.amountCents, count: 1 })
-        }
+        // Legacy titles outside the provider's limits are still included in local details.
+        if (title && !title.includes('\0') && Array.from(title).length <= 120) titles.add(title)
       }
     }
   }
-  return { items: [...byTitle.values()], amountCents, count, unclassified }
+  return { titles: [...titles], details, amountCents, count: details.length }
 }
 
 type ClassifyBatch = (titles: string[], signal: AbortSignal) => Promise<unknown>
@@ -62,26 +53,29 @@ export async function analyzeCategorySpending(
   input: CategorySpendingInput, classifyBatch: ClassifyBatch, signal: AbortSignal,
 ): Promise<CategorySpendingRow[]> {
   if (signal.aborted) throw new Error('AI_CANCELLED')
-  const totals = new Map<SpendingCategory, SpendingTotals>()
-  if (input.unclassified.count) totals.set('other', { ...input.unclassified })
-  for (let start = 0; start < input.items.length; start += batchSize) {
-    const batch = input.items.slice(start, start + batchSize)
-    const categories = await classifyBatch(batch.map(item => item.title), signal)
+  const categoryByTitle = new Map<string, SpendingCategory>()
+  for (let start = 0; start < input.titles.length; start += batchSize) {
+    const batch = input.titles.slice(start, start + batchSize)
+    const categories = await classifyBatch(batch, signal)
     if (signal.aborted) throw new Error('AI_CANCELLED')
     if (!Array.isArray(categories) || categories.length !== batch.length) throw new Error('AI_BAD_RESPONSE')
-    for (const [index, item] of batch.entries()) {
+    for (const [index, title] of batch.entries()) {
       const category = categories[index]
       if (!spendingCategories.includes(category)) throw new Error('AI_BAD_RESPONSE')
-      const row = totals.get(category)
-      if (row) {
-        row.amountCents += item.amountCents
-        row.count += item.count
-      } else {
-        totals.set(category, { amountCents: item.amountCents, count: item.count })
-      }
+      categoryByTitle.set(title, category)
     }
   }
-  return Array.from(totals, ([category, row]) => ({
-    category, ...row, share: input.amountCents ? row.amountCents / input.amountCents : 0,
-  })).sort((a, b) => b.amountCents - a.amountCents || b.count - a.count)
+
+  const groups = new Map<SpendingCategory, CategorySpendingDetail[]>()
+  for (const detail of input.details) {
+    const category = categoryByTitle.get(detail.entry.title.trim()) ?? 'other'
+    const details = groups.get(category)
+    if (details) details.push(detail)
+    else groups.set(category, [detail])
+  }
+  return Array.from(groups, ([category, details]) => {
+    const amountCents = details.reduce((sum, detail) => sum + detail.entry.amountCents, 0)
+    details.sort((a, b) => b.entry.month.localeCompare(a.entry.month))
+    return { category, details, amountCents, count: details.length, share: input.amountCents ? amountCents / input.amountCents : 0 }
+  }).sort((a, b) => b.amountCents - a.amountCents || b.count - a.count)
 }
