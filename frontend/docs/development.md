@@ -42,6 +42,7 @@ Windows 和安卓共用 Vue、TypeScript、Tauri 2 和 Rust 代码，每台设�
 | `src-tauri/src/` | `lib.rs` 注册命令并管理连接。`ledger.rs` 验证、查询、写事务。`schema_v1.sql` 定义首版表结构。 |
 | `src-tauri/gen/android/`、`src-tauri/capabilities/`、`src-tauri/icons/` | 安卓 Gradle 工程、Tauri 权限与打包图标。两端共用的账务逻辑位于 `src/` 和 Rust 模块。 |
 | `src/features/pets/`、`resources/pets/` | 内置角色图包和台词、选择与展示组件、酒馆角色卡解析及本机存储。详见[桌宠与角色卡](pets.md)。 |
+| `src/features/ai/` | 菜单聊天与桌宠弹窗共用对话组件，账务动作的预览、确认及执行范围在前端核对。[共享聊天界面](../src/features/ai/ChatWindow.vue) · [聊天动作审核](../src/features/ai/useLedgerActionReview.ts) |
 | `src/features/reminders/` | 桌宠提醒文案、设备本地任务列表、前台弹窗队列及原生系统通知接口。设置页与聊天动作共用此模块。 |
 | `src/integrations/ai/`、`src-tauri/src/ai/`、`resources/ai/` | 前端运行 Pi Agent Core，按本轮勾选范围查账。账务修改先预览，再由账本会话写入。Rust 使用设备凭据向 DeepSeek 请求回复或工具调用，两端使用同一份账务动作定义。[动作目录](../resources/ai/ledger-action-tools.json) · [使用示例](ai-features.md#在聊天里改账) |
 | `tests/`、`src-tauri/src/ledger/tests.rs` | 前端业务、会话和扩展契约回归。原生 SQLite 写入、重开和事务回归。 |
@@ -53,9 +54,17 @@ Windows 和安卓共用 Vue、TypeScript、Tauri 2 和 Rust 代码，每台设�
 
 写入失败时，页面显示错误，用户可更正并重试。写入成功但快照读取失败时，账单已持久化，会话保留完成回调，界面提供「重新读取」。恢复时只重读快照并执行一次回调。平台选择器也依靠这个时序，在账单草稿中选中新创建的平台。[会话回归测试](../tests/ledger-session.test.mjs)
 
-提醒任务单独保存在本机。分钟间隔从首次触发的时间戳按实际经过的分钟数递推。每日随机提醒保存起止钟点和随机种子，按时段开始的本地日期计算触发分钟。前端、Windows 投递程序和安卓接收器使用同一组样例验证跨午夜的触发时间。所有渠道共用 31 天的重复间隔上限，以匹配 Windows 任务计划程序。[前端时间计算](../src/features/reminders/recurrence.ts) · [Windows 调度器的间隔范围](https://learn.microsoft.com/en-us/windows/win32/taskschd/taskschedulerschema-interval-repetitiontype-element)
+## 聊天、分享范围与本机缓存
 
-聊天使用独立的本机 IndexedDB，按聊天入口、角色 ID、账本月份和对话 ID 保存草稿及问答。选中的账单、待确认操作和进行中的模型请求只在当前窗口有效。已发送问答带有原来的分享范围，恢复后由当前勾选项决定哪些历史可发给模型。验证跨窗口写入与清除可运行 `node --experimental-strip-types --test tests/chat-storage.browser.mjs`，使用隔离的 Chromium 配置。[聊天存储](../src/features/pets/chatStorage.ts) · [会话与重试](../src/features/pets/chatHistory.ts)
+菜单聊天和桌宠弹窗都将「当前聊天」和「账本附件」默认收起，菜单页还提供「对象与月份」。折叠只改变布局。附件摘要显示分享状态，选择明细时显示实际勾选笔数。切换对话、角色或月份会重新从「不附账本」开始。修改共用折叠组件时，在 320px 宽度用键盘展开、切换角色或月份并核对焦点，再确认零笔明细会阻止发送，选一笔后收起仍只发送该笔。删除确认、改账审核和存储错误均须可达。[折叠组件](../src/features/ai/ChatDisclosure.vue) · [对象与月份](../src/features/ai/ChatPage.vue) · [共享聊天界面](../src/features/ai/ChatWindow.vue)
+
+问答、草稿和选中的对话保存在本机 IndexedDB，按聊天入口、角色 ID 和账本月份隔离。已发送问答保留原来的分享范围，重开后仍按本轮勾选项筛选可发给模型的历史。窗口关闭前会尝试写完排队的本地更改。按角色清除会覆盖该角色所有月份的菜单聊天及桌宠弹窗。回归时让另一窗口保留在途回复，再执行清除并重开，核对旧内容没有重新写回。运行 `node --experimental-strip-types --test tests/chat-storage.browser.mjs` 可在隔离的 Chromium 配置中复验存储行为。[聊天存储](../src/features/pets/chatStorage.ts) · [会话与重试](../src/features/pets/chatHistory.ts) · [关窗保存](../src/features/pets/chatLifecycle.ts) · [清除聊天缓存](../src/features/settings/ChatCacheSettingsPage.vue)
+
+## 提醒规则与系统投递
+
+提醒任务单独保存在本机。固定间隔按首次触发的时间戳递推，支持 10 分钟的整数倍，最长 31 天。每日随机时段保存起止钟点和随机种子，按时段开始的本地日期计算触发分钟。前端、Windows 投递程序和 Android 接收器使用同一组样例核对跨午夜的触发时间。[前端时间计算](../src/features/reminders/recurrence.ts) · [Windows 排程](../src-tauri/src/reminders/windows.rs) · [Android 接收器](../src-tauri/gen/android/app/src/main/java/app/savemywallet/ledger/PetReminderReceiver.kt)
+
+设置页和 Pi 提醒动作都通过同一任务服务操作。关闭系统通知任务会撤销设备排程，重开重复任务时从下一次有效时间继续。改动这条链路时，用合成任务验证暂停期间跨过触发时间、应用重启、删除失败后的重试，以及删除后系统排程已撤销。[任务服务](../src/features/reminders/reminderService.ts) · [聊天动作核对](../src/features/reminders/reminderManagement.ts) · [提醒回归测试](../tests/reminder-service.test.mjs)
 
 ## 接手一个变更
 
@@ -78,3 +87,5 @@ SQLite v8 给经聊天审核的写入增加一次操作的局部撤销。实际�
 ## 运行与验收
 
 首次开发从项目根目录运行 `npm ci`、`npm run tauri -- dev`。本地账本路径、工具链和双端构建命令见[项目说明](../README.md)。前端改动运行 `npm test` 和 `npm run build`。涉及 SQLite 时另跑 `cargo test --manifest-path src-tauri/Cargo.toml --lib`。验证真实持久化时使用测试账本，在原生客户端完成一次录入、勾选、关闭和重开。纯浏览器页面需要测试替身才能模拟 Tauri IPC。
+
+0.7.2 的聊天交互验收使用 Windows 原生 WebView2、隔离账本和本地模拟模型，并在 Chrome 检查中英文窄屏布局。Android arm64 调试 APK 已核对签名、对齐和包内资源，设备上的软键盘、返回导航及后台通知投递仍待真机验证。[项目里程碑与验收记录](../../docs/milestones.md)

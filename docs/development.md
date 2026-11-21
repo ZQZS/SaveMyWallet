@@ -27,6 +27,20 @@ Windows 和安卓共用一个客户端。每台设备维护自己的 SQLite 账�
 
 例如，12 月工资为 3,000 元，某平台有待还分期 200 元和待确认补款 100 元。勾选后，仍待还降至 0，预计结余仍为 2,700 元。若把补款确认为次年 1 月应还的 120 元，12 月预计结余变为 2,800 元，1 月待还增加 120 元。这组数据可同时验证清单、跨年移月与新计算实现。
 
+## 聊天、提醒和账本恢复
+
+桌宠弹窗和菜单聊天共用聊天窗口。Vue 中的 Pi Agent Core 调度工具，Rust 原生层用本机凭据请求 DeepSeek。查勾选项时，`inspect_selected_bills` 在本机按本轮分享的明细计算待还总额和最大一笔。还款、确认补款、作废等写操作先展示具体账单和影响范围，用户确认后才进入账本写入流程。[Pi 工具入口](../frontend/src/integrations/ai/agentChat.ts) · [动作定义](../frontend/resources/ai/ledger-action-tools.json) · [确认与执行](../frontend/src/features/ai/useLedgerActionReview.ts)
+
+| 要改的行为 | 本机数据与验收要点 |
+| --- | --- |
+| 续聊、草稿和清理 | IndexedDB 按入口、角色和月份区分对话。删除单段只清该段问答与草稿，按角色清理覆盖其所有月份的菜单聊天和桌宠弹窗。重启要能续写草稿，另一窗口的迟到回复也不能恢复已删除的对话。[聊天存储](../frontend/src/features/pets/chatStorage.ts) · [聊天缓存设置](../frontend/src/features/settings/ChatCacheSettingsPage.vue) |
+| 聊天控件的折叠与分享 | 两个入口都可收起「当前聊天」和「账本附件」，菜单聊天另有「对象与月份」。展开、收起仅改变布局。可勾一笔测试账单，收起附件再发送，核对工具仍只读这一笔。换对话或月份后分享范围回到「不附账本」。[共用聊天窗口](../frontend/src/features/ai/ChatWindow.vue) · [菜单聊天页](../frontend/src/features/ai/ChatPage.vue) |
+| 提醒排程与投递 | 设置与聊天动作共用本机提醒任务。应用内弹窗由前台投递，系统通知交给 Windows 任务计划程序或 Android AlarmManager。关闭重复提醒应撤销后续投递，重新开启时按原规则找下次时间。用跨午夜的随机时段检查过期跳过行为。[提醒服务](../frontend/src/features/reminders/reminderService.ts) · [时间规则](../frontend/src/features/reminders/recurrence.ts) · [渠道与示例](../frontend/docs/pets.md#桌宠提醒与任务列表) |
+| 撤销一次 AI 改账 | SQLite 在同一写事务中记录受影响数据的前后值。用两笔 AI 标为已还的账单和一笔随后手录的账单验证撤销。若用户又修改了同一还款状态，应提示冲突并保留现状。[变更记录](../frontend/src-tauri/src/ledger/ai_undo_capture.rs) · [撤销与冲突核对](../frontend/src-tauri/src/ledger/ai_undo.rs) |
+| 还原到昨天或七天前 | 跨日后首次访问账本时检查并归档上一日状态，写入路径也会先做检查。整本还原要先预览并确认，已绑定同步的设备要先解绑。以设备本地日期验证恰好七天前的还原点仍可用，超过七天的自动还原点、AI 撤销记录和绑定前备份会清理。[归档实现](../frontend/src-tauri/src/ledger/history.rs) · [还原示例](../frontend/README.md#自动备份与账本还原) |
+
+聊天缓存、角色和提醒任务保存在各自设备上。JSON 备份与跨设备同步处理账本数据。清理聊天缓存后，已确认的改账结果仍保存在 SQLite。[客户端开发手册](../frontend/docs/development.md) · [里程碑与验收环境](milestones.md)
+
 ## 维护同步与 WASM 模板
 
 在线账本接口与 `LedgerRepository` 对齐，平台使用稳定 ID，批量勾选返回实际变更的 `changedIds`。双端客户端在本机事务中保存业务数据和待上传操作。联调时分别验证分期丢回执后重发、两端确认同一补款时选择不同金额、拉取页面与游标的原子更新，以及解绑后的 JSON 导入和重置。[接口与冲突处理](../backend/docs/sync.md) · [原生备份实现](../frontend/src-tauri/src/ledger/backup.rs)
@@ -46,3 +60,5 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib
 ```
 
 在同一 `frontend/` 目录运行 `npm run tauri -- dev` 可验证 SQLite 读写。改账务流程时，用测试账本完成录入、勾选、撤销和重开。改数据库结构时，用旧版本创建的测试账本验证迁移后重开。改页面时分别检查桌面布局、安卓窄屏和返回操作。提交验证结果时注明实际覆盖的环境，例如 Windows 客户端、APK 静态检查或安卓真机。
+
+改动聊天持久化时，可在 `frontend/` 单独运行 `node --experimental-strip-types --test tests/chat-storage.browser.mjs`。该用例以临时浏览器配置验证真实 IndexedDB 的双连接写入、删除和清理。若浏览器安装在自定义位置，可用 `SMW_TEST_BROWSER` 指定可执行文件。[浏览器回归用例](../frontend/tests/chat-storage.browser.mjs)
