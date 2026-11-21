@@ -47,3 +47,30 @@ test('十二月窗口包含首尾月份，账本最早月份之前不生成数�
   assert.deepEqual(buildStatistics(ledger, '1900-02', 6).map(row => row.month), ['1900-01', '1900-02'])
   assert.deepEqual(buildStatistics(ledger, '', 6), [])
 })
+
+test('自选区间包含跨年的首尾月，按月保留工资覆盖与负结余', () => {
+  const entries = [
+    entry('区间之前', 'a', '2026-11', 1500, 'due'),
+    entry('首月', 'a', '2026-12', 2400, 'paid'),
+    entry('末月', 'b', '2027-02', 3000, 'estimated'),
+    entry('区间之后', 'a', '2027-03', 2000, 'due'),
+  ]
+  const book = { ...ledger, entries }
+  const series = buildStatistics(book, '2026-12', '2027-02')
+  assert.deepEqual(series.map(({ month, total, balance }) => [month, total, balance]), [
+    ['2026-12', 2400, -2400], ['2027-01', 0, 10000], ['2027-02', 3000, 7000],
+  ])
+  assert.deepEqual(buildStatistics(book, '2026-12', '2026-12'), [series[0]])
+})
+
+test('自选区间可覆盖完整账本年月范围，拒绝反向、越界或缺失月份', () => {
+  const series = buildStatistics(ledger, '1900-01', '2099-12')
+  assert.equal(series.length, 2400)
+  assert.equal(series[0].month, '1900-01')
+  assert.equal(series.at(-1).month, '2099-12')
+  for (const [start, end] of [
+    ['2026-02', '2026-01'], ['1899-12', '1900-01'], ['2099-12', '2100-01'], ['', '2026-01'], ['2026-01', ''],
+  ]) {
+    assert.deepEqual(buildStatistics(ledger, start, end), [])
+  }
+})

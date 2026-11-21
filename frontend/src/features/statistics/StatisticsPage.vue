@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowRight } from 'lucide-vue-next'
 import { useLedgerSession } from '../../app/ledgerSession'
-import { isMonth, MAX_MONTH, MIN_MONTH, shiftMonth } from '../../domain/ledger'
+import { isMonth, MAX_MONTH, MIN_MONTH } from '../../domain/ledger'
 import { formatMoney, formatMonth, locale, t } from '../../i18n'
-import { buildStatistics, type StatisticsRange } from './statistics'
+import { buildStatistics, statisticsStartMonth, type StatisticsRange } from './statistics'
 import MonthlyTrendChart from './MonthlyTrendChart.vue'
 import SpendingAnalysis from './SpendingAnalysis.vue'
 
@@ -13,12 +13,27 @@ const { data, month: ledgerMonth, busy, selectMonth, calculateMonth } = useLedge
 const route = useRoute()
 const router = useRouter()
 const ranges = [6, 12] as const
-const range = computed<StatisticsRange>(() => route.query.range === '12' ? 12 : 6)
-const endMonth = computed(() => {
-  const end = route.query.end
-  return typeof end === 'string' && isMonth(end) ? end : ledgerMonth.value
+const monthError = ref('')
+
+interface Period {
+  start: string
+  end: string
+  preset: StatisticsRange | null
+}
+
+function presetPeriod(end: string, preset: StatisticsRange): Period {
+  return { start: statisticsStartMonth(end, preset), end, preset }
+}
+
+const period = computed<Period>(() => {
+  const query = route.query
+  const end = typeof query.end === 'string' && isMonth(query.end) ? query.end : ledgerMonth.value
+  if (typeof query.start === 'string' && isMonth(query.start) && query.start <= end) {
+    return { start: query.start, end, preset: null }
+  }
+  return presetPeriod(end, query.range === '12' ? 12 : 6)
 })
-const points = computed(() => data.value ? buildStatistics(data.value, endMonth.value, range.value, calculateMonth) : [])
+const points = computed(() => data.value ? buildStatistics(data.value, period.value.start, period.value.end, calculateMonth) : [])
 const selected = computed(() => points.value.find(point => point.month === route.query.month) ?? points.value.at(-1))
 const totals = computed(() => {
   let salary = 0
@@ -32,17 +47,32 @@ const totals = computed(() => {
 const platforms = computed(() => selected.value?.groups.filter(group => group.total > 0).sort((a, b) => b.total - a.total) ?? [])
 const percent = computed(() => new Intl.NumberFormat(locale.value, { style: 'percent', maximumFractionDigits: 1 }))
 
-function setView(end: string, length: StatisticsRange, month = end) {
-  const inRange = month >= shiftMonth(end, 1 - length) && month <= end
+function setView({ start, end, preset }: Period, month = end) {
+  monthError.value = ''
   void router.replace({ name: 'statistics', query: {
-    end, range: length === 12 ? '12' : undefined, month: inRange && month !== end ? month : undefined,
+    start: preset === null ? start : undefined, end, range: preset === 12 ? '12' : undefined,
+    month: month >= start && month < end ? month : undefined,
   } })
 }
 
-function changeEndMonth(event: Event) {
+function changeMonth(event: Event, boundary: 'start' | 'end') {
   const input = event.target as HTMLInputElement
-  if (isMonth(input.value)) setView(input.value, range.value)
-  else input.value = endMonth.value
+  const value = input.value
+  const current = period.value
+  if (!isMonth(value)) {
+    monthError.value = 'forms.monthError'
+    input.value = current[boundary]
+    return
+  }
+  const next = boundary === 'end' && current.preset
+    ? presetPeriod(value, current.preset)
+    : { ...current, [boundary]: value, preset: null }
+  if (next.start > next.end) {
+    monthError.value = 'stats.monthOrder'
+    input.value = current[boundary]
+    return
+  }
+  setView(next, boundary === 'start' ? selected.value?.month : next.end)
 }
 
 async function openLedger() {
@@ -58,19 +88,25 @@ async function openLedger() {
     <header class="page-heading">
       <div>
         <h1>{{ t('stats.title') }}</h1>
-        <p class="date-range"><time :datetime="points[0].month">{{ formatMonth(points[0].month) }}</time>
-          – <time :datetime="endMonth">{{ formatMonth(endMonth) }}</time></p>
+        <p class="date-range"><time :datetime="period.start">{{ formatMonth(period.start) }}</time>
+          – <time :datetime="period.end">{{ formatMonth(period.end) }}</time></p>
       </div>
       <div class="filters">
         <div class="range-switch" role="group" :aria-label="t('stats.range')">
-          <button v-for="length in ranges" :key="length" type="button" :aria-pressed="range === length"
-            :disabled="busy" @click="setView(endMonth, length, selected.month)">{{ t('stats.months', { count: length }) }}</button>
+          <button v-for="length in ranges" :key="length" type="button" :aria-pressed="period.preset === length"
+            :disabled="busy" @click="setView(presetPeriod(period.end, length), selected.month)">{{ t('stats.months', { count: length }) }}</button>
         </div>
-        <label class="month-filter">{{ t('stats.endMonth') }}
-          <input type="month" :value="endMonth" :min="MIN_MONTH" :max="MAX_MONTH" :disabled="busy" @change="changeEndMonth">
-        </label>
+        <div class="month-bounds">
+          <label class="month-filter">{{ t('stats.startMonth') }}
+            <input type="month" name="startMonth" :value="period.start" :min="MIN_MONTH" :max="period.end" :disabled="busy" @change="changeMonth($event, 'start')">
+          </label>
+          <label class="month-filter">{{ t('stats.endMonth') }}
+            <input type="month" name="endMonth" :value="period.end" :min="period.preset ? MIN_MONTH : period.start" :max="MAX_MONTH" :disabled="busy" @change="changeMonth($event, 'end')">
+          </label>
+        </div>
       </div>
     </header>
+    <p v-if="monthError" class="month-error" role="alert">{{ t(monthError) }}</p>
 
     <dl class="period-summary">
       <div class="period-balance"><dt>{{ t('stats.periodBalance') }}</dt><dd>{{ formatMoney(totals.balance) }}</dd></div>
@@ -81,11 +117,11 @@ async function openLedger() {
     <div class="trends">
       <section class="panel trend" aria-labelledby="spending-heading">
         <h2 id="spending-heading">{{ t('stats.spendingTrend') }}</h2>
-        <MonthlyTrendChart :points="points" kind="spending" :selected-month="selected.month" @select="setView(endMonth, range, $event)" />
+        <MonthlyTrendChart :points="points" kind="spending" :selected-month="selected.month" @select="setView(period, $event)" />
       </section>
       <section class="panel trend" aria-labelledby="balance-heading">
         <h2 id="balance-heading">{{ t('stats.balanceTrend') }}</h2>
-        <MonthlyTrendChart :points="points" kind="balance" :selected-month="selected.month" @select="setView(endMonth, range, $event)" />
+        <MonthlyTrendChart :points="points" kind="balance" :selected-month="selected.month" @select="setView(period, $event)" />
         <p class="formula">{{ t('stats.balanceFormula') }}</p>
       </section>
     </div>
@@ -126,8 +162,11 @@ h2 { font-size: 1.1rem; letter-spacing: -.025em; }
 .range-switch { display: flex; gap: 2px; padding: 3px; background: var(--soft); border-radius: 10px; }
 .range-switch button { min-height: 36px; padding: 5px 12px; border: 0; background: transparent; color: var(--sub); border-radius: 7px; font-size: .83rem; }
 .range-switch button[aria-pressed="true"] { background: var(--surface); color: var(--green); font-weight: 650; box-shadow: 0 1px 4px #1024191a; }
-.month-filter { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; font-size: .8rem; color: var(--sub); }
-.month-filter input { min-width: 0; max-width: 100%; min-height: 42px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: var(--ink); padding: 4px 8px; }
+.filters { align-items: flex-end; max-width: 100%; }
+.month-bounds { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; max-width: 100%; }
+.month-filter { display: grid; gap: 4px; min-width: 0; font-size: .8rem; color: var(--sub); }
+.month-filter input { width: 100%; min-width: 0; min-height: 42px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: var(--ink); padding: 4px 8px; }
+.month-error { color: #a03123; font-size: .875rem; }
 .period-summary { display: grid; grid-template-columns: 1.25fr 1fr 1fr; margin: 0; border-radius: 16px; background: var(--soft); overflow: hidden; }
 .period-summary > div { min-width: 0; padding: clamp(16px, 2.5vw, 28px); align-content: center; }
 .period-summary dt { font-size: .88rem; color: var(--sub); }

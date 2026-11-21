@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { formatMoney, formatMonth, locale, t } from '../../i18n'
 import type { StatisticsMonth } from './statistics'
 
@@ -13,6 +13,23 @@ const segments = [
   { key: 'estimated', label: 'ledger.needsConfirmation' },
 ] as const
 const selected = computed(() => props.points.find(point => point.month === props.selectedMonth))
+const byYear = computed(() => props.points.length > 12)
+const years = computed(() => [...new Set(props.points.map(point => point.month.slice(0, 4)))])
+const chartYear = computed(() => (selected.value ?? props.points[0])?.month.slice(0, 4))
+const visiblePoints = computed(() => byYear.value
+  ? props.points.filter(point => point.month.slice(0, 4) === chartYear.value)
+  : props.points)
+const firstYear = computed(() => visiblePoints.value[0]?.month.slice(0, 4))
+const lastYear = computed(() => visiblePoints.value.at(-1)?.month.slice(0, 4))
+const columns = ref<HTMLElement | null>(null)
+
+function changeYear(event: Event) {
+  const year = (event.target as HTMLSelectElement).value
+  const months = props.points.filter(point => point.month.startsWith(year))
+  const targetMonth = year + props.selectedMonth.slice(4)
+  const next = months.find(point => point.month >= targetMonth) ?? months.at(-1)
+  if (next) emit('select', next.month)
+}
 const axisFormat = computed(() => new Intl.NumberFormat(locale.value, {
   style: 'currency', currency: 'CNY', currencyDisplay: 'narrowSymbol',
   notation: 'compact', minimumFractionDigits: 0, maximumFractionDigits: 2,
@@ -35,10 +52,10 @@ function y(value: number) {
   return 100 * (scale.value.max - value) / (scale.value.max - scale.value.min)
 }
 function x(index: number) {
-  return 100 * (index + 0.5) / props.points.length
+  return 100 * (index + 0.5) / visiblePoints.value.length
 }
-const line = computed(() => props.points.map((point, index) => x(index) + ',' + y(point.balance)).join(' '))
-const area = computed(() => [x(0) + ',' + y(0), line.value, x(props.points.length - 1) + ',' + y(0)].join(' '))
+const line = computed(() => visiblePoints.value.map((point, index) => x(index) + ',' + y(point.balance)).join(' '))
+const area = computed(() => [x(0) + ',' + y(0), line.value, x(visiblePoints.value.length - 1) + ',' + y(0)].join(' '))
 
 function pointLabel(point: TrendPoint) {
   const month = formatMonth(point.month)
@@ -47,18 +64,24 @@ function pointLabel(point: TrendPoint) {
     due: formatMoney(point.due), estimated: formatMoney(point.estimated) })
 }
 
-function navigate(event: KeyboardEvent, index: number) {
+function navigate(event: KeyboardEvent, point: TrendPoint) {
+  const index = props.points.indexOf(point)
   const last = props.points.length - 1
   const destinations: Record<string, number> = {
     ArrowLeft: Math.max(0, index - 1), ArrowRight: Math.min(last, index + 1), Home: 0, End: last,
   }
   if (!Object.hasOwn(destinations, event.key)) return
   event.preventDefault()
-  const next = destinations[event.key]
-  const columns = (event.currentTarget as HTMLButtonElement).parentElement
-  columns?.querySelectorAll('button')[next]?.focus()
-  emit('select', props.points[next].month)
+  emit('select', props.points[destinations[event.key]].month)
 }
+
+// When arrow keys cross a year boundary the destination button is rendered on the next update.
+watch(() => props.selectedMonth, async () => {
+  if (columns.value?.contains(document.activeElement)) {
+    await nextTick()
+    columns.value?.querySelector<HTMLButtonElement>('button[aria-pressed="true"]')?.focus()
+  }
+})
 </script>
 
 <template>
@@ -75,7 +98,7 @@ function navigate(event: KeyboardEvent, index: number) {
         <div><span>{{ t('forms.repaymentTotal') }}</span><strong>{{ formatMoney(selected.total) }}</strong></div>
       </template>
     </div>
-    <div class="chart-grid">
+    <div class="chart-grid" :class="{ 'crosses-year': firstYear !== lastYear }">
       <div class="axis" aria-hidden="true">
         <span v-for="tick in scale.ticks" :key="tick" class="axis-width">{{ axisFormat.format(tick / 100) }}</span>
         <span v-for="tick in scale.ticks" :key="'tick-' + tick" class="tick-label" :style="{ top: y(tick) + '%' }">{{ axisFormat.format(tick / 100) }}</span>
@@ -86,11 +109,12 @@ function navigate(event: KeyboardEvent, index: number) {
           <polygon :points="area" />
           <polyline :points="line" vector-effect="non-scaling-stroke" />
         </svg>
-        <div class="month-columns" :class="{ dense: points.length > 6 }" :style="{ gridTemplateColumns: 'repeat(' + points.length + ', minmax(0, 1fr))' }">
-          <button v-for="(point, index) in points" :key="point.month" type="button"
+        <div ref="columns" class="month-columns" :class="{ dense: visiblePoints.length > 6 }" :style="{ gridTemplateColumns: 'repeat(' + visiblePoints.length + ', minmax(0, 1fr))' }">
+          <button v-for="(point, index) in visiblePoints" :key="point.month" type="button"
+            :class="{ 'year-boundary': firstYear !== lastYear && point.month.endsWith('-01') }"
             :aria-label="pointLabel(point)" :title="pointLabel(point)" :aria-pressed="point.month === selectedMonth"
             :tabindex="(selected ? point.month === selectedMonth : index === 0) ? 0 : -1"
-            @click="emit('select', point.month)" @keydown="navigate($event, index)">
+            @click="emit('select', point.month)" @keydown="navigate($event, point)">
             <span v-if="kind === 'spending' && point.total > 0" class="bar" :style="{ height: (100 - y(point.total)) + '%' }" aria-hidden="true">
               <i v-for="segment in segments" :key="segment.key" :class="segment.key" :style="{ flexGrow: point[segment.key] }" />
             </span>
@@ -98,11 +122,17 @@ function navigate(event: KeyboardEvent, index: number) {
             <span class="month-tick" aria-hidden="true">{{ monthFormat.format(new Date(point.month + '-01T00:00:00Z')) }}</span>
           </button>
         </div>
+        <div v-if="firstYear !== lastYear" class="axis-years" aria-hidden="true"><span>{{ firstYear }}</span><span>{{ lastYear }}</span></div>
       </div>
     </div>
     <div v-if="selected" class="readout">
       <time :datetime="selected.month">{{ formatMonth(selected.month) }}</time>
       <strong>{{ formatMoney(kind === 'balance' ? selected.balance : selected.total) }}</strong>
+      <label v-if="byYear" class="year-picker">{{ t('statsChart.year') }}
+        <select :value="chartYear" @change="changeYear">
+          <option v-for="year in years" :key="year" :value="year">{{ year }}</option>
+        </select>
+      </label>
     </div>
   </div>
 </template>
@@ -124,6 +154,7 @@ function navigate(event: KeyboardEvent, index: number) {
 .due { background: var(--chart-due); }
 .estimated { background: repeating-linear-gradient(135deg, #e0c49b 0 3px, var(--chart-estimated) 3px 5px); }
 .chart-grid { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; margin: 19px 0 32px; }
+.chart-grid.crosses-year { margin-bottom: 48px; }
 .axis, .plot { position: relative; height: 154px; }
 .axis { display: grid; color: var(--sub); font-size: .7rem; }
 .axis-width { grid-area: 1 / 1; visibility: hidden; }
@@ -159,9 +190,16 @@ function navigate(event: KeyboardEvent, index: number) {
 .dot.deficit { border-color: #a24e38; }
 [aria-pressed="true"] .dot { width: 11px; height: 11px; box-shadow: 0 0 0 2px var(--surface); }
 .month-tick { position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%); font-size: .72rem; white-space: nowrap; }
+.month-columns .year-boundary { border-inline-start: 1px dashed var(--line); }
+.axis-years { position: absolute; inset-inline: 0; top: calc(100% + 22px); display: flex; justify-content: space-between; color: var(--sub); font-size: .7rem; }
 [aria-pressed="true"] .month-tick { color: var(--green); font-weight: 700; }
 .readout { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; color: var(--sub); font-size: .82rem; }
 .readout strong { color: var(--ink); font-size: .95rem; overflow-wrap: anywhere; }
+.year-picker { display: inline-flex; gap: 5px; align-items: center; margin-inline-start: auto; }
+.year-picker select { min-height: 32px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--ink); padding-inline: 4px; font: inherit; }
+@media (pointer: coarse) {
+  .year-picker select { min-height: 44px; }
+}
 @container (max-width: 440px) {
   .dense button:nth-child(even) .month-tick { visibility: hidden; }
 }
