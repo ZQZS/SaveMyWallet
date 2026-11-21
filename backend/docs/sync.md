@@ -126,7 +126,9 @@ SQLite 结构 v4 增加作废标记，v5 增加可选的分期标识。升级保
 | 改动 | 查看实现 |
 | --- | --- |
 | 部署配置、认证、建表与数据库版本 | [服务入口](../SaveMyWallet.Api/Program.cs) · [账本认证](../SaveMyWallet.Api/Middleware/LedgerAccess.cs) · [数据库初始化](../SaveMyWallet.Infrastructure/Persistence/Schema.cs) |
-| HTTP 路由与请求契约 | [账本路由](../SaveMyWallet.Api/Endpoints/LedgerEndpoints.cs) · [账务请求 DTO](../SaveMyWallet.Dto/LedgerRequests.cs) · [同步路由](../SaveMyWallet.Api/Endpoints/SyncEndpoints.cs) · [同步 DTO](../SaveMyWallet.Dto/SyncContract.cs) |
+| 账本路由与请求、响应 | [账本路由](../SaveMyWallet.Api/Endpoints/LedgerEndpoints.cs) · [新增账单请求](../SaveMyWallet.Dto/QueryDto/Bills/NewBillQueryDto.cs) · [账本快照响应](../SaveMyWallet.Dto/QueryResultDto/Ledger/LedgerSnapshotQueryResultDto.cs) |
+| 同步路由与请求、响应 | [同步路由](../SaveMyWallet.Api/Endpoints/SyncEndpoints.cs) · [推送操作请求](../SaveMyWallet.Dto/QueryDto/Sync/SyncOperationQueryDto.cs) · [推送结果](../SaveMyWallet.Dto/QueryResultDto/Sync/PushQueryResultDto.cs) |
+| 同步记录与数据库映射 | [同步记录](../SaveMyWallet.Dto/EntityDto/Sync/SyncRecordEntityDto.cs) · [数据库记录行](../SaveMyWallet.Dto/EntityDto/Ledger/StoredRecordEntityDto.cs) · [EF Core 表映射](../SaveMyWallet.Infrastructure/Persistence/LedgerDb.cs) |
 | 账务与同步用例 | [账本服务](../SaveMyWallet.Services/LedgerService.cs) · [同步服务](../SaveMyWallet.Services/SyncService.cs) |
 | 账务规则、同步读写与事务 | [账务命令](../SaveMyWallet.Core/LedgerCommands.cs) · [账务校验](../SaveMyWallet.Core/LedgerRules.cs) · [存储接口](../SaveMyWallet.Interfaces/ISyncStore.cs) · [PostgreSQL 实现](../SaveMyWallet.Infrastructure/Persistence/SyncStore.cs) |
 | 本机待同步队列、绑定、冲突和网络重试 | [SQLite 同步表](../../frontend/src-tauri/src/schema_v2.sql) · [v3 迁移](../../frontend/src-tauri/src/schema_v3.sql) · [v4 明细作废标记](../../frontend/src-tauri/src/schema_v4.sql) · [v5 分期标识](../../frontend/src-tauri/src/schema_v5.sql) · [本机同步状态](../../frontend/src-tauri/src/ledger/sync.rs) · [原生网络请求](../../frontend/src-tauri/src/sync_client.rs) |

@@ -1,8 +1,8 @@
-using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.Http.HttpResults;
 using SaveMyWallet.Api.Middleware;
 using SaveMyWallet.Core;
-using SaveMyWallet.Dto;
+using SaveMyWallet.Dto.QueryDto;
 using SaveMyWallet.Interfaces;
 
 namespace SaveMyWallet.Api.Endpoints;
@@ -13,22 +13,22 @@ public static class LedgerEndpoints
     {
         app.MapGet("/ledger", (HttpContext ctx, ILedgerService service, CancellationToken ct) =>
             service.GetLedgerAsync(LedgerAccess.Id(ctx), ct));
-        app.MapPost("/platforms", (HttpContext ctx, ILedgerService service, NewPlatform input, CancellationToken ct) =>
-            WriteResult(service.CreatePlatformAsync(LedgerAccess.Id(ctx), OperationId(ctx), input, ct)));
-        app.MapPost("/bills", (HttpContext ctx, ILedgerService service, NewBill input, CancellationToken ct) =>
-            WriteResult(service.CreateBillAsync(LedgerAccess.Id(ctx), OperationId(ctx), input, ct)));
-        app.MapPost("/bills/batch", (HttpContext ctx, ILedgerService service, NewBill?[] inputs, CancellationToken ct) =>
-            WriteResult(service.CreateBillsAsync(LedgerAccess.Id(ctx), OperationId(ctx), inputs, ct)));
-        app.MapPost("/bills/{id}/confirm", (HttpContext ctx, ILedgerService service, string id, Confirmation input, CancellationToken ct) =>
-            WriteResult(service.ConfirmAsync(LedgerAccess.Id(ctx), OperationId(ctx), BillId(ctx, id), input, ct)));
-        app.MapPut("/bills/{id}/voided", (HttpContext ctx, ILedgerService service, string id, BillValidity input, CancellationToken ct) =>
-            WriteResult(service.SetVoidedAsync(LedgerAccess.Id(ctx), OperationId(ctx), BillId(ctx, id), input, ct)));
-        app.MapPut("/bills/{id}/installment/voided", (HttpContext ctx, ILedgerService service, string id, BillValidity input, CancellationToken ct) =>
-            WriteResult(service.SetInstallmentVoidedAsync(LedgerAccess.Id(ctx), OperationId(ctx), BillId(ctx, id, 2), input, ct)));
-        app.MapPatch("/payments", (HttpContext ctx, ILedgerService service, Payment input, CancellationToken ct) =>
-            WriteResult(service.PayAsync(LedgerAccess.Id(ctx), OperationId(ctx), input, ct)));
-        app.MapPut("/budget", (HttpContext ctx, ILedgerService service, Budget input, CancellationToken ct) =>
-            WriteResult(service.SaveBudgetAsync(LedgerAccess.Id(ctx), OperationId(ctx), input, ct)));
+        app.MapPost("/platforms", (HttpContext ctx, ILedgerService service, NewPlatformQueryDto input, CancellationToken ct) =>
+            service.CreatePlatformAsync(LedgerAccess.Id(ctx), OperationId(ctx), input, ct));
+        app.MapPost("/bills", (HttpContext ctx, ILedgerService service, NewBillQueryDto input, CancellationToken ct) =>
+            NoContentAsync(service.CreateBillAsync(LedgerAccess.Id(ctx), OperationId(ctx), input, ct)));
+        app.MapPost("/bills/batch", (HttpContext ctx, ILedgerService service, NewBillQueryDto?[] inputs, CancellationToken ct) =>
+            NoContentAsync(service.CreateBillsAsync(LedgerAccess.Id(ctx), OperationId(ctx), inputs, ct)));
+        app.MapPost("/bills/{id}/confirm", (HttpContext ctx, ILedgerService service, string id, ConfirmationQueryDto input, CancellationToken ct) =>
+            NoContentAsync(service.ConfirmAsync(LedgerAccess.Id(ctx), OperationId(ctx), BillId(ctx, id), input, ct)));
+        app.MapPut("/bills/{id}/voided", (HttpContext ctx, ILedgerService service, string id, BillValidityQueryDto input, CancellationToken ct) =>
+            NoContentAsync(service.SetVoidedAsync(LedgerAccess.Id(ctx), OperationId(ctx), BillId(ctx, id), input, ct)));
+        app.MapPut("/bills/{id}/installment/voided", (HttpContext ctx, ILedgerService service, string id, BillValidityQueryDto input, CancellationToken ct) =>
+            service.SetInstallmentVoidedAsync(LedgerAccess.Id(ctx), OperationId(ctx), BillId(ctx, id, 2), input, ct));
+        app.MapPatch("/payments", (HttpContext ctx, ILedgerService service, PaymentQueryDto input, CancellationToken ct) =>
+            service.PayAsync(LedgerAccess.Id(ctx), OperationId(ctx), input, ct));
+        app.MapPut("/budget", (HttpContext ctx, ILedgerService service, BudgetQueryDto input, CancellationToken ct) =>
+            NoContentAsync(service.SaveBudgetAsync(LedgerAccess.Id(ctx), OperationId(ctx), input, ct)));
     }
 
     private static string BillId(HttpContext ctx, string routeId, int trailingSegments = 1)
@@ -47,9 +47,9 @@ public static class LedgerEndpoints
         return keys[0]!;
     }
 
-    private static async Task<IResult> WriteResult(Task<JsonNode?> operation)
+    private static async Task<NoContent> NoContentAsync(Task operation)
     {
-        var result = await operation;
-        return result is null ? Results.NoContent() : Results.Json(result);
+        await operation;
+        return TypedResults.NoContent();
     }
 }

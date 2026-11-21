@@ -126,9 +126,13 @@
           "Microsoft.Extensions.Logging.Abstractions": "10.0.0"
         }
       },
+      "savemywallet.constant": {
+        "type": "Project"
+      },
       "savemywallet.core": {
         "type": "Project",
         "dependencies": {
+          "SaveMyWallet.Constant": "[0.3.0, )",
           "SaveMyWallet.Dto": "[0.3.0, )"
         }
       },

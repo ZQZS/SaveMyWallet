@@ -1,60 +1,73 @@
 using System.Data;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
+using SaveMyWallet.Constant;
 using SaveMyWallet.Core;
-using SaveMyWallet.Dto;
+using SaveMyWallet.Dto.EntityDto;
+using SaveMyWallet.Dto.QueryDto;
+using SaveMyWallet.Dto.QueryResultDto;
 using SaveMyWallet.Interfaces;
 
 namespace SaveMyWallet.Infrastructure.Persistence;
 
 internal sealed class SyncStore(LedgerDb db) : ISyncStore
 {
-    private const int PageSize = 64;
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
-    public async Task<BootstrapResult> BootstrapAsync(string ledgerId, CancellationToken ct)
+    public async Task<BootstrapQueryResultDto> BootstrapAsync(string ledgerId, CancellationToken ct)
     {
         await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead, ct);
         var cursor = await Cursor(ledgerId, ct);
         var rows = await db.Records.AsNoTracking().Where(r => r.LedgerId == ledgerId)
             .OrderBy(r => r.Kind).ThenBy(r => r.Id).ToListAsync(ct);
-        var result = new BootstrapResult(ledgerId, cursor, rows.Select(ToRecord).ToArray());
         await tx.CommitAsync(ct);
-        return result;
+        return new BootstrapQueryResultDto(ledgerId, cursor, rows.Select(ToRecord).Select(SyncRecordResults.FromEntity).ToArray());
     }
 
-    public async Task<PullResult> PullAsync(string ledgerId, long cursor, CancellationToken ct)
+    public async Task<PullQueryResultDto> PullAsync(string ledgerId, long cursor, CancellationToken ct)
     {
         await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead, ct);
         var latest = await Cursor(ledgerId, ct);
         if (cursor > latest) throw new LedgerException(409, "invalid_cursor", "Cursor is ahead of this ledger.");
         var batches = await db.Batches.AsNoTracking().Where(b => b.LedgerId == ledgerId && b.Cursor > cursor)
-            .OrderBy(b => b.Cursor).Take(PageSize).ToListAsync(ct);
-        var changes = new Dictionary<(string, string), SyncRecord>();
+            .OrderBy(b => b.Cursor).Take(SyncConstants.PullPageSize).ToListAsync(ct);
+        await tx.CommitAsync(ct);
+        var changes = new Dictionary<(string, string), SyncRecordQueryResultDto>();
         foreach (var batch in batches)
         {
-            foreach (var row in JsonSerializer.Deserialize<SyncRecord[]>(batch.Records, Json)!)
+            foreach (var row in JsonSerializer.Deserialize<SyncRecordQueryResultDto[]>(batch.Records, Json)!)
                 changes[(row.Kind, row.Id)] = row;
             cursor = batch.Cursor;
         }
-        await tx.CommitAsync(ct);
-        return new PullResult(ledgerId, cursor, changes.Values.ToArray(), cursor < latest);
+        return new PullQueryResultDto(ledgerId, cursor, changes.Values.ToArray(), cursor < latest);
     }
 
-    public Task<JsonNode?> PushAsync(string ledgerId, SyncOperation operation, CancellationToken ct)
+    public Task<PushQueryResultDto> PushAsync(string ledgerId, SyncOperationQueryDto operation, CancellationToken ct)
     {
-        var request = JsonSerializer.SerializeToNode(operation, Json)!;
-        return Write(ledgerId, operation.OperationId, request, operation.Seed,
-            _ => new RestMutation(operation.Changes, null), operation.Changes, ct);
+        var request = JsonSerializer.SerializeToElement(operation, Json);
+        return Write(ledgerId, operation.OperationId, request, operation.Seed, operation.Changes,
+            _ => new RestMutationEntityDto(operation.Changes),
+            (_, cursor, current, changed) => new PushQueryResultDto(operation.OperationId, cursor,
+                current.Select(SyncRecordResults.FromEntity).ToArray(), changed.Select(r => r.Id).ToArray()), ct);
     }
 
-    public Task<JsonNode?> ExecuteRestAsync(string ledgerId, string operationId, string fingerprint,
-        Func<IReadOnlyList<SyncRecord>, RestMutation> build, CancellationToken ct) =>
-        Write(ledgerId, operationId, JsonValue.Create(fingerprint)!, false, build, null, ct);
+    public Task ExecuteRestAsync(string ledgerId, string operationId, string fingerprint,
+        Func<IReadOnlyList<SyncRecordEntityDto>, RestMutationEntityDto> build, CancellationToken ct) =>
+        Write<RestMutationEntityDto, QueryResultBase?>(ledgerId, operationId, JsonSerializer.SerializeToElement(fingerprint), false,
+            null, build, static (_, _, _, _) => null, ct);
 
-    private async Task<JsonNode?> Write(string ledgerId, string operationId, JsonNode request, bool seed,
-        Func<IReadOnlyList<SyncRecord>, RestMutation> build, IReadOnlyList<SyncChange>? syncChanges, CancellationToken ct)
+    public Task<TResult> ExecuteRestAsync<TResult>(string ledgerId, string operationId, string fingerprint,
+        Func<IReadOnlyList<SyncRecordEntityDto>, RestMutationEntityDto<TResult>> build, CancellationToken ct)
+        where TResult : QueryResultBase =>
+        Write(ledgerId, operationId, JsonSerializer.SerializeToElement(fingerprint), false,
+            null, build, static (mutation, _, _, _) => mutation.Response, ct);
+
+    private async Task<TResult> Write<TMutation, TResult>(string ledgerId, string operationId, JsonElement request,
+        bool seed, IReadOnlyList<SyncChangeQueryDto>? syncChanges, Func<IReadOnlyList<SyncRecordEntityDto>, TMutation> build,
+        Func<TMutation, long, IReadOnlyList<SyncRecordEntityDto>, IReadOnlyList<SyncRecordEntityDto>, TResult> buildResponse,
+        CancellationToken ct)
+        where TMutation : RestMutationEntityDto
+        where TResult : QueryResultBase?
     {
         await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
         // All write paths acquire this ledger's lock before checking receipts or incrementing its cursor.
@@ -65,9 +78,9 @@ internal sealed class SyncStore(LedgerDb db) : ISyncStore
         var receipt = await db.Receipts.FindAsync([ledgerId, operationId], ct);
         if (receipt is not null)
         {
-            if (!JsonNode.DeepEquals(request, JsonNode.Parse(receipt.Request)))
+            if (!JsonElement.DeepEquals(request, JsonElement.Parse(receipt.Request)))
                 throw new LedgerException(409, "replay_mismatch", "This operation ID already belongs to another request.");
-            return JsonNode.Parse(receipt.Response);
+            return JsonSerializer.Deserialize<TResult>(receipt.Response, Json)!;
         }
         if (seed && head.Cursor != 0) throw new SyncConflict("seed_exists", head.Cursor, []);
 
@@ -77,15 +90,21 @@ internal sealed class SyncStore(LedgerDb db) : ISyncStore
             var ids = syncChanges.Select(c => c.Id).Distinct().ToArray();
             // Only insertions can add members to a series. Load their siblings under the ledger lock.
             var seriesIds = syncChanges.Where(c => c.Kind == "entry" && c.Before is null)
-                .Select(c => (c.After as JsonObject)?["installmentId"])
-                .OfType<JsonValue>().Select(v => v.TryGetValue<string>(out var id) ? id : null)
+                .Select(c => LedgerValues.GetInstallmentIdHint(c.After))
                 .OfType<string>().Distinct().ToArray();
             query = seriesIds.Length == 0
                 ? query.Where(r => r.Kind == "platform" || ids.Contains(r.Id))
                 : db.Records.FromSql($"""
                     SELECT * FROM smw_records WHERE "LedgerId" = {ledgerId} AND
                     ("Kind" = 'platform' OR "Id" = ANY({ids}) OR
-                     ("Kind" = 'entry' AND "Value"->>'installmentId' = ANY({seriesIds})))
+                     CASE
+                         WHEN "Kind" <> 'entry' THEN NULL
+                         WHEN "Value" ? 'installmentId' THEN "Value"->>'installmentId'
+                         WHEN COALESCE("Value"->>'kind', "Value"->>'Kind') IN ('single', 'estimate') THEN NULL
+                         -- Older clients also wrote other casings of the installmentId property.
+                         ELSE (SELECT field.value FROM jsonb_each_text("Value") AS field
+                               WHERE lower(field.key COLLATE "C") = 'installmentid' LIMIT 1)
+                     END = ANY({seriesIds}))
                     """);
         }
         var rows = await query.ToListAsync(ct);
@@ -95,43 +114,41 @@ internal sealed class SyncStore(LedgerDb db) : ISyncStore
         if (syncChanges is null) SyncRules.ValidateEnvelope(mutation.Changes);
 
         var current = mutation.Changes.Select(c => byKey.TryGetValue((c.Kind, c.Id), out var row)
-            ? ToRecord(row) : new SyncRecord(c.Kind, c.Id, null, null)).ToArray();
+            ? ToRecord(row) : new SyncRecordEntityDto(c.Kind, c.Id, null, null)).ToArray();
         for (int i = 0; i < current.Length; i++)
         {
             var change = mutation.Changes[i];
             var existing = current[i];
-            if (JsonNode.DeepEquals(change.After, existing.Value)) continue;
-            if (existing.Version != change.BaseVersion || !JsonNode.DeepEquals(change.Before, existing.Value))
+            if (ValuesEqual(change.After, existing.Value)) continue;
+            if (existing.Version != change.BaseVersion || !ValuesEqual(change.Before, existing.Value))
                 throw new SyncConflict("conflict", head.Cursor, current);
         }
         LedgerRules.Validate(known, mutation.Changes);
 
-        var changed = new List<SyncRecord>();
+        var changed = new List<SyncRecordEntityDto>();
         for (int i = 0; i < current.Length; i++)
         {
             var change = mutation.Changes[i];
-            if (JsonNode.DeepEquals(change.After, current[i].Value)) continue;
+            if (ValuesEqual(change.After, current[i].Value)) continue;
             if (!byKey.TryGetValue((change.Kind, change.Id), out var row))
             {
-                row = new StoredRecord { LedgerId = ledgerId, Kind = change.Kind, Id = change.Id, Version = operationId };
+                row = new StoredRecordEntityDto { LedgerId = ledgerId, Kind = change.Kind, Id = change.Id, Version = operationId };
                 db.Records.Add(row);
             }
-            row.Value = change.After?.ToJsonString();
+            row.Value = change.After?.GetRawText();
             row.Version = operationId;
-            current[i] = new SyncRecord(row.Kind, row.Id, change.After, operationId);
+            current[i] = new SyncRecordEntityDto(row.Kind, row.Id, change.After, operationId);
             changed.Add(current[i]);
         }
         if (changed.Count > 0)
         {
             head.Cursor++;
-            db.Batches.Add(new ChangeBatch { LedgerId = ledgerId, Cursor = head.Cursor,
+            db.Batches.Add(new ChangeBatchEntityDto { LedgerId = ledgerId, Cursor = head.Cursor,
                 Records = JsonSerializer.Serialize(changed, Json) });
         }
-        JsonNode? response = syncChanges is not null
-            ? JsonSerializer.SerializeToNode(new PushResult(operationId, head.Cursor, current, changed.Select(r => r.Id).ToArray()), Json)
-            : mutation.Response;
-        db.Receipts.Add(new Receipt { LedgerId = ledgerId, OperationId = operationId,
-            Request = request.ToJsonString(), Response = response?.ToJsonString() ?? "null" });
+        var response = buildResponse(mutation, head.Cursor, current, changed);
+        db.Receipts.Add(new ReceiptEntityDto { LedgerId = ledgerId, OperationId = operationId,
+            Request = request.GetRawText(), Response = JsonSerializer.Serialize(response, Json) });
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
         return response;
@@ -140,6 +157,9 @@ internal sealed class SyncStore(LedgerDb db) : ISyncStore
     private Task<long> Cursor(string ledgerId, CancellationToken ct) =>
         db.Ledgers.AsNoTracking().Where(l => l.LedgerId == ledgerId).Select(l => l.Cursor).SingleOrDefaultAsync(ct);
 
-    private static SyncRecord ToRecord(StoredRecord row) =>
-        new(row.Kind, row.Id, row.Value is null ? null : JsonNode.Parse(row.Value), row.Version);
+    private static bool ValuesEqual(JsonElement? left, JsonElement? right) =>
+        left.HasValue && right.HasValue ? JsonElement.DeepEquals(left.Value, right.Value) : left.HasValue == right.HasValue;
+
+    private static SyncRecordEntityDto ToRecord(StoredRecordEntityDto row) =>
+        new(row.Kind, row.Id, row.Value is null ? null : JsonSerializer.Deserialize<JsonElement?>(row.Value), row.Version);
 }

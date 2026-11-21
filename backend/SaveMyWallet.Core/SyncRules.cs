@@ -1,11 +1,11 @@
 using System.Text;
-using SaveMyWallet.Dto;
+using SaveMyWallet.Dto.QueryDto;
 
 namespace SaveMyWallet.Core;
 
 public static class SyncRules
 {
-    public static void ValidateOperation(SyncOperation operation)
+    public static void ValidateOperation(SyncOperationQueryDto operation)
     {
         CheckOperationId(operation.OperationId);
         if (operation.Changes is null || operation.Changes.Count == 0)
@@ -19,7 +19,7 @@ public static class SyncRules
             throw new LedgerException(400, "invalid_operation_id", "Invalid operation ID.");
     }
 
-    public static void ValidateEnvelope(IReadOnlyList<SyncChange> changes)
+    public static void ValidateEnvelope(IReadOnlyList<SyncChangeQueryDto> changes)
     {
         var keys = new HashSet<(string, string)>();
         foreach (var change in changes)

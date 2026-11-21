@@ -1,5 +1,5 @@
-using System.Text.Json.Nodes;
-using SaveMyWallet.Dto;
+using SaveMyWallet.Dto.EntityDto;
+using SaveMyWallet.Dto.QueryResultDto;
 
 namespace SaveMyWallet.Core;
 
@@ -7,30 +7,29 @@ internal static class InstallmentSeries
 {
     private sealed record Schedule(string PlatformId, string Title, long AmountCents, int Count, DateOnly FirstMonth)
     {
-        internal static Schedule From(JsonObject entry, int index) => new(
-            (string)entry["platformId"]!, (string)entry["title"]!, (long)entry["amountCents"]!,
-            (int)entry["installmentCount"]!, LedgerRules.Month((string)entry["month"]!).AddMonths(1 - index));
+        internal static Schedule From(BillEntryQueryResultDto entry) => new(
+            entry.PlatformId, entry.Title, entry.AmountCents, entry.InstallmentCount!.Value,
+            LedgerRules.Month(entry.Month).AddMonths(1 - entry.InstallmentIndex!.Value));
     }
 
-    internal static IEnumerable<SyncRecord> Find(IReadOnlyList<SyncRecord> rows, SyncRecord selected)
+    internal static IEnumerable<(SyncRecordEntityDto Row, BillEntryQueryResultDto Entry)> Find(
+        IReadOnlyList<SyncRecordEntityDto> rows, SyncRecordEntityDto selected)
     {
-        var entry = selected.Value!.AsObject();
-        if ((string?)entry["kind"] != "installment") throw Unavailable();
-        var installmentId = (string?)entry["installmentId"];
-        var schedule = Schedule.From(entry, (int)entry["installmentIndex"]!);
-        var periods = new SortedDictionary<int, SyncRecord>();
+        var selectedEntry = LedgerValues.ReadEntry(selected.Value);
+        if (selectedEntry.Kind != "installment") throw Unavailable();
+        var schedule = Schedule.From(selectedEntry);
+        var periods = new SortedDictionary<int, (SyncRecordEntityDto, BillEntryQueryResultDto)>();
         foreach (var row in rows)
         {
-            if (row.Kind != "entry" || row.Value is not JsonObject member ||
-                (string?)member["kind"] != "installment" || (string?)member["installmentId"] != installmentId)
-                continue;
-            var index = (int)member["installmentIndex"]!;
-            if (Schedule.From(member, index) != schedule)
+            if (row.Kind != "entry" || row.Value is null) continue;
+            var member = ReferenceEquals(row, selected) ? selectedEntry : LedgerValues.ReadEntry(row.Value);
+            if (member.Kind != "installment" || member.InstallmentId != selectedEntry.InstallmentId) continue;
+            if (Schedule.From(member) != schedule)
             {
-                if (installmentId is not null) throw Unavailable();
+                if (selectedEntry.InstallmentId is not null) throw Unavailable();
                 continue;
             }
-            if (!periods.TryAdd(index, row)) throw Unavailable();
+            if (!periods.TryAdd(member.InstallmentIndex!.Value, (row, member))) throw Unavailable();
         }
         // Individual records were validated on write, so every index is between 1 and Count.
         if (periods.Count != schedule.Count) throw Unavailable();
@@ -40,21 +39,21 @@ internal static class InstallmentSeries
     private static LedgerException Unavailable() =>
         new(409, "installment_group_unavailable", "The complete installment schedule could not be identified.");
 
-    internal static void ValidateNewMembers(IReadOnlyList<SyncRecord> current, IReadOnlyList<JsonObject> added)
+    internal static void ValidateNewMembers(IReadOnlyList<SyncRecordEntityDto> current, IReadOnlyList<BillEntryQueryResultDto> added)
     {
-        var seriesIds = added.Select(entry => (string)entry["installmentId"]!).ToHashSet();
-        var existing = current.Where(row => row.Kind == "entry").Select(row => row.Value).OfType<JsonObject>()
-            .Where(entry => (string?)entry["installmentId"] is { } id && seriesIds.Contains(id));
-        foreach (var series in added.Concat(existing).GroupBy(entry => (string)entry["installmentId"]!))
+        var seriesIds = added.Select(entry => entry.InstallmentId!).ToHashSet();
+        var existing = current.Where(row => row.Kind == "entry" && row.Value is not null)
+            .Select(row => LedgerValues.ReadEntry(row.Value))
+            .Where(entry => entry.InstallmentId is { } id && seriesIds.Contains(id));
+        foreach (var series in added.Concat(existing).GroupBy(entry => entry.InstallmentId))
         {
             Schedule? expected = null;
             var indices = new HashSet<int>();
             foreach (var member in series)
             {
-                var index = (int)member["installmentIndex"]!;
-                var schedule = Schedule.From(member, index);
+                var schedule = Schedule.From(member);
                 expected ??= schedule;
-                LedgerRules.Require(schedule == expected && indices.Add(index), "invalid_installment",
+                LedgerRules.Require(schedule == expected && indices.Add(member.InstallmentIndex!.Value), "invalid_installment",
                     "Periods in an installment must share a schedule and have distinct indices.");
             }
         }

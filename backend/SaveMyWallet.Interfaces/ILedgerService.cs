@@ -1,17 +1,17 @@
-using System.Text.Json.Nodes;
-using SaveMyWallet.Dto;
+using SaveMyWallet.Dto.QueryDto;
+using SaveMyWallet.Dto.QueryResultDto;
 
 namespace SaveMyWallet.Interfaces;
 
 public interface ILedgerService
 {
-    Task<LedgerSnapshot> GetLedgerAsync(string ledgerId, CancellationToken ct);
-    Task<JsonNode?> CreatePlatformAsync(string ledgerId, string operationId, NewPlatform input, CancellationToken ct);
-    Task<JsonNode?> CreateBillAsync(string ledgerId, string operationId, NewBill input, CancellationToken ct);
-    Task<JsonNode?> CreateBillsAsync(string ledgerId, string operationId, NewBill?[] inputs, CancellationToken ct);
-    Task<JsonNode?> ConfirmAsync(string ledgerId, string operationId, string id, Confirmation input, CancellationToken ct);
-    Task<JsonNode?> SetVoidedAsync(string ledgerId, string operationId, string id, BillValidity input, CancellationToken ct);
-    Task<JsonNode?> SetInstallmentVoidedAsync(string ledgerId, string operationId, string id, BillValidity input, CancellationToken ct);
-    Task<JsonNode?> PayAsync(string ledgerId, string operationId, Payment input, CancellationToken ct);
-    Task<JsonNode?> SaveBudgetAsync(string ledgerId, string operationId, Budget input, CancellationToken ct);
+    Task<LedgerSnapshotQueryResultDto> GetLedgerAsync(string ledgerId, CancellationToken ct);
+    Task<PlatformCreatedQueryResultDto> CreatePlatformAsync(string ledgerId, string operationId, NewPlatformQueryDto input, CancellationToken ct);
+    Task CreateBillAsync(string ledgerId, string operationId, NewBillQueryDto input, CancellationToken ct);
+    Task CreateBillsAsync(string ledgerId, string operationId, NewBillQueryDto?[] inputs, CancellationToken ct);
+    Task ConfirmAsync(string ledgerId, string operationId, string id, ConfirmationQueryDto input, CancellationToken ct);
+    Task SetVoidedAsync(string ledgerId, string operationId, string id, BillValidityQueryDto input, CancellationToken ct);
+    Task<ChangedIdsQueryResultDto> SetInstallmentVoidedAsync(string ledgerId, string operationId, string id, BillValidityQueryDto input, CancellationToken ct);
+    Task<ChangedIdsQueryResultDto> PayAsync(string ledgerId, string operationId, PaymentQueryDto input, CancellationToken ct);
+    Task SaveBudgetAsync(string ledgerId, string operationId, BudgetQueryDto input, CancellationToken ct);
 }

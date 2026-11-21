@@ -1,61 +1,68 @@
 using System.Security.Cryptography;
 using System.Text.Json;
-using System.Text.Json.Nodes;
+using SaveMyWallet.Constant;
 using SaveMyWallet.Core;
-using SaveMyWallet.Dto;
+using SaveMyWallet.Dto.QueryDto;
+using SaveMyWallet.Dto.QueryResultDto;
 using SaveMyWallet.Interfaces;
 
 namespace SaveMyWallet.Services;
 
 public sealed class LedgerService(ISyncStore store) : ILedgerService
 {
-    public async Task<LedgerSnapshot> GetLedgerAsync(string ledgerId, CancellationToken ct)
+    public async Task<LedgerSnapshotQueryResultDto> GetLedgerAsync(string ledgerId, CancellationToken ct)
     {
         var snapshot = await store.BootstrapAsync(ledgerId, ct);
-        var rows = snapshot.Records.Where(r => r.Value is not null).ToList();
-        var settings = rows.Where(r => r.Kind == "setting").ToDictionary(r => r.Id, r => r.Value!);
-        return new LedgerSnapshot(
-            rows.Where(r => r.Kind == "platform").Select(r => r.Value!).ToArray(),
-            rows.Where(r => r.Kind == "entry").Select(r => r.Value!).ToArray(),
-            new LedgerSettings(
-                settings.GetValueOrDefault(LedgerRules.DefaultSalary) ?? JsonValue.Create(0),
-                settings.GetValueOrDefault(LedgerRules.WarningFloor) ?? JsonValue.Create(0)),
-            rows.Where(r => r.Kind == "override").ToDictionary(r => r.Id, r => r.Value!));
+        var records = snapshot.Records;
+        var amounts = records.OfType<SyncRecordQueryResultDto<long?>>().Where(r => r.Value.HasValue);
+        var settings = amounts.Where(r => r.Kind == "setting").ToDictionary(r => r.Id, r => r.Value!.Value);
+        return new LedgerSnapshotQueryResultDto(
+            records.OfType<SyncRecordQueryResultDto<PlatformQueryResultDto?>>()
+                .Select(r => r.Value).OfType<PlatformQueryResultDto>().ToArray(),
+            records.OfType<SyncRecordQueryResultDto<BillEntryQueryResultDto?>>()
+                .Select(r => r.Value).OfType<BillEntryQueryResultDto>().ToArray(),
+            new LedgerSettingsQueryResultDto(
+                settings.GetValueOrDefault(LedgerConstants.DefaultSalary),
+                settings.GetValueOrDefault(LedgerConstants.WarningFloor)),
+            amounts.Where(r => r.Kind == "override").ToDictionary(r => r.Id, r => r.Value!.Value));
     }
 
-    public Task<JsonNode?> CreatePlatformAsync(string ledgerId, string operationId, NewPlatform input, CancellationToken ct) =>
-        WriteAsync(ledgerId, operationId, "POST /platforms", input, rows => LedgerCommands.CreatePlatform(rows, input), ct);
+    public Task<PlatformCreatedQueryResultDto> CreatePlatformAsync(string ledgerId, string operationId, NewPlatformQueryDto input, CancellationToken ct) =>
+        store.ExecuteRestAsync(ledgerId, operationId, Fingerprint(operationId, "POST /platforms", input),
+            rows => LedgerCommands.CreatePlatform(rows, input), ct);
 
-    public Task<JsonNode?> CreateBillAsync(string ledgerId, string operationId, NewBill input, CancellationToken ct) =>
-        WriteAsync(ledgerId, operationId, "POST /bills", input, _ => LedgerCommands.CreateBill(input), ct);
+    public Task CreateBillAsync(string ledgerId, string operationId, NewBillQueryDto input, CancellationToken ct) =>
+        store.ExecuteRestAsync(ledgerId, operationId, Fingerprint(operationId, "POST /bills", input),
+            _ => LedgerCommands.CreateBill(input), ct);
 
-    public Task<JsonNode?> CreateBillsAsync(string ledgerId, string operationId, NewBill?[] inputs, CancellationToken ct) =>
-        WriteAsync(ledgerId, operationId, "POST /bills/batch", inputs, _ => LedgerCommands.CreateBills(inputs), ct);
+    public Task CreateBillsAsync(string ledgerId, string operationId, NewBillQueryDto?[] inputs, CancellationToken ct) =>
+        store.ExecuteRestAsync(ledgerId, operationId, Fingerprint(operationId, "POST /bills/batch", inputs),
+            _ => LedgerCommands.CreateBills(inputs), ct);
 
-    public Task<JsonNode?> ConfirmAsync(string ledgerId, string operationId, string id, Confirmation input, CancellationToken ct) =>
-        WriteAsync(ledgerId, operationId, "POST /bills/confirm", new { id, input },
+    public Task ConfirmAsync(string ledgerId, string operationId, string id, ConfirmationQueryDto input, CancellationToken ct) =>
+        store.ExecuteRestAsync(ledgerId, operationId, Fingerprint(operationId, "POST /bills/confirm", new { id, input }),
             rows => LedgerCommands.Confirm(rows, id, input), ct);
 
-    public Task<JsonNode?> SetVoidedAsync(string ledgerId, string operationId, string id, BillValidity input, CancellationToken ct) =>
-        WriteAsync(ledgerId, operationId, "PUT /bills/voided", new { id, input },
+    public Task SetVoidedAsync(string ledgerId, string operationId, string id, BillValidityQueryDto input, CancellationToken ct) =>
+        store.ExecuteRestAsync(ledgerId, operationId, Fingerprint(operationId, "PUT /bills/voided", new { id, input }),
             rows => LedgerCommands.SetVoided(rows, id, input.Voided), ct);
 
-    public Task<JsonNode?> SetInstallmentVoidedAsync(string ledgerId, string operationId, string id, BillValidity input, CancellationToken ct) =>
-        WriteAsync(ledgerId, operationId, "PUT /bills/installment/voided", new { id, input },
+    public Task<ChangedIdsQueryResultDto> SetInstallmentVoidedAsync(string ledgerId, string operationId, string id, BillValidityQueryDto input, CancellationToken ct) =>
+        store.ExecuteRestAsync(ledgerId, operationId, Fingerprint(operationId, "PUT /bills/installment/voided", new { id, input }),
             rows => LedgerCommands.SetInstallmentVoided(rows, id, input.Voided), ct);
 
-    public Task<JsonNode?> PayAsync(string ledgerId, string operationId, Payment input, CancellationToken ct) =>
-        WriteAsync(ledgerId, operationId, "PATCH /payments", input, rows => LedgerCommands.Pay(rows, input), ct);
+    public Task<ChangedIdsQueryResultDto> PayAsync(string ledgerId, string operationId, PaymentQueryDto input, CancellationToken ct) =>
+        store.ExecuteRestAsync(ledgerId, operationId, Fingerprint(operationId, "PATCH /payments", input),
+            rows => LedgerCommands.Pay(rows, input), ct);
 
-    public Task<JsonNode?> SaveBudgetAsync(string ledgerId, string operationId, Budget input, CancellationToken ct) =>
-        WriteAsync(ledgerId, operationId, "PUT /budget", input, rows => LedgerCommands.SaveBudget(rows, input), ct);
+    public Task SaveBudgetAsync(string ledgerId, string operationId, BudgetQueryDto input, CancellationToken ct) =>
+        store.ExecuteRestAsync(ledgerId, operationId, Fingerprint(operationId, "PUT /budget", input),
+            rows => LedgerCommands.SaveBudget(rows, input), ct);
 
-    private Task<JsonNode?> WriteAsync<T>(string ledgerId, string operationId, string action, T input,
-        Func<IReadOnlyList<SyncRecord>, RestMutation> build, CancellationToken ct)
+    private static string Fingerprint<T>(string operationId, string action, T input)
     {
         SyncRules.CheckOperationId(operationId);
         // Existing receipts use these action strings and the default JSON property casing.
-        var fingerprint = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new { action, input })));
-        return store.ExecuteRestAsync(ledgerId, operationId, fingerprint, build, ct);
+        return Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new { action, input })));
     }
 }

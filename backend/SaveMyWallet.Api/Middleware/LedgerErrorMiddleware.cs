@@ -1,4 +1,5 @@
 using SaveMyWallet.Core;
+using SaveMyWallet.Dto.QueryResultDto;
 
 namespace SaveMyWallet.Api.Middleware;
 
@@ -14,12 +15,13 @@ internal static class LedgerErrorMiddleware
         catch (SyncConflict conflict)
         {
             context.Response.StatusCode = conflict.Status;
-            await context.Response.WriteAsJsonAsync(new { conflict.Code, conflict.Cursor, conflict.Records });
+            var records = conflict.Records.Select(SyncRecordResults.FromEntity).ToArray();
+            await context.Response.WriteAsJsonAsync(new SyncConflictQueryResultDto(conflict.Code, conflict.Cursor, records));
         }
         catch (LedgerException error)
         {
             context.Response.StatusCode = error.Status;
-            await context.Response.WriteAsJsonAsync(new { error.Code, error.Message });
+            await context.Response.WriteAsJsonAsync(new LedgerErrorQueryResultDto(error.Code, error.Message));
         }
     }
 }

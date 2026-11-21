@@ -11,9 +11,20 @@
 | `SaveMyWallet.Api` | 启动 HTTP 服务、注册依赖、认证请求，将路由分派给业务服务。 |
 | `SaveMyWallet.Services` | 实现账本和同步用例，调用核心规则，通过存储接口读取快照或提交变更。 |
 | `SaveMyWallet.Core` | 生成账务命令的变更记录，校验金额、分期、状态转换和同步操作。 |
-| `SaveMyWallet.Dto` | 定义账单请求、账本快照、同步记录和操作结果等共享数据结构。 |
+| `SaveMyWallet.Constant` | 定义金额上限、预算设置键和同步分页大小，供业务规则、服务和存储实现共用。 |
+| `SaveMyWallet.Dto` | 定义持久化实体、请求与返回结果。具体 DTO 的名称后缀和公共命名空间按 `EntityDto`、`QueryDto`、`QueryResultDto` 三种类别区分。 |
 | `SaveMyWallet.Interfaces` | 定义账本服务、同步服务和同步存储的接口。 |
-| `SaveMyWallet.Infrastructure` | 使用 EF Core 和 PostgreSQL 实现存储接口，负责建表、事务、游标和幂等回执。 |
+| `SaveMyWallet.Infrastructure` | 用 EF Core 将数据库行类型映射到 PostgreSQL 表，实现存储接口，管理建表、事务、游标和幂等回执。 |
+
+新增 DTO 时，使用普通 C# `class` 继承对应基类，并将文件放入业务子目录。基类和标记接口位于类别根目录。有响应体的 API 使用具名结果类，无响应体的写入接口返回 HTTP 204。
+
+| 类别目录 | 基类与接口 | 业务子目录 |
+| --- | --- | --- |
+| `EntityDto/` | `EntityBase` 实现 `IEntity` | `Ledger/` 存放账本头、当前记录和账务变更，`Sync/` 存放同步记录、变更批次和操作回执。 |
+| `QueryDto/` | `QueryBase` 实现 `IQuery` | `Bills/` 处理账单，`Platforms/` 处理平台，`Payments/` 处理还款，`Budget/` 处理预算，`Sync/` 处理同步。 |
+| `QueryResultDto/` | `QueryResultBase` 实现 `IQueryResult` | `Ledger/` 存放账本快照及设置，`Platforms/` 和 `Bills/` 存放平台、账单及变更结果，`Sync/` 存放同步结果与冲突，`Errors/` 存放通用错误响应。 |
+
+账单和平台的业务规则直接读写 `BillEntryQueryResultDto` 和 `PlatformQueryResultDto` 的属性，预算金额使用 `long`（单位为分）。扩展记录字段时，在对应类上声明属性，在 `LedgerRules` 中校验业务约束。`LedgerValues` 负责同步数据的类型转换，包括区分缺失字段与显式 `null`。同步请求与记录保留原始 JSON 值，用于核对离线编辑的旧快照和重试请求。
 
 ## 在 Windows 上启动开发服务
 

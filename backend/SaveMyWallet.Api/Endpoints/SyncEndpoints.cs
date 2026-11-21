@@ -1,5 +1,5 @@
 using SaveMyWallet.Api.Middleware;
-using SaveMyWallet.Dto;
+using SaveMyWallet.Dto.QueryDto;
 using SaveMyWallet.Interfaces;
 
 namespace SaveMyWallet.Api.Endpoints;
@@ -12,7 +12,7 @@ internal static class SyncEndpoints
             service.BootstrapAsync(LedgerAccess.Id(ctx), ct));
         app.MapGet("/sync/pull", (long cursor, HttpContext ctx, ISyncService service, CancellationToken ct) =>
             service.PullAsync(LedgerAccess.Id(ctx), cursor, ct));
-        app.MapPost("/sync/push", (SyncOperation operation, HttpContext ctx, ISyncService service, CancellationToken ct) =>
+        app.MapPost("/sync/push", (SyncOperationQueryDto operation, HttpContext ctx, ISyncService service, CancellationToken ct) =>
             service.PushAsync(LedgerAccess.Id(ctx), operation, ct));
     }
 }

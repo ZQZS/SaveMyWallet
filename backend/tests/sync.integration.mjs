@@ -130,6 +130,36 @@ test('two isolated ledgers sync through the running PostgreSQL API', async t => 
     assert.deepEqual(await bootstrap(), before)
   })
 
+  await t.test('sync preserves strict record fields and compares the original replay and conflict payloads', async () => {
+    const value = entry(platformId, 'single', '同步字段校验')
+    const baseline = await bootstrap()
+    for (const [fields, code] of [
+      [{ installmentIndex: undefined }, 'invalid_record'],
+      [{ extra: true }, 'invalid_record'],
+      [{ amountCents: String(value.amountCents) }, 'invalid_number'],
+      [{ installmentId: null }, 'invalid_field'],
+      [{ depositCents: null }, 'invalid_number'],
+      [{ voided: null }, 'invalid_voided'],
+    ]) {
+      const result = await push(operation([change('entry', value.id, { ...value, ...fields })]))
+      assert.deepEqual([result.status, result.data.code], [400, code])
+    }
+    assert.deepEqual(await bootstrap(), baseline)
+
+    const op = operation([change('entry', value.id, value)])
+    const ack = success(await push(op))
+    const alteredReplay = structuredClone(op)
+    alteredReplay.changes[0].after.extra = true
+    const replay = await push(alteredReplay)
+    assert.deepEqual([replay.status, replay.data.code], [409, 'replay_mismatch'])
+
+    const current = ack.records[0]
+    const stale = { ...current, value: { ...value, extra: true } }
+    const conflict = await push(operation([change('entry', value.id, { ...value, status: 'paid' }, stale)]))
+    assert.deepEqual([conflict.status, conflict.data.code, conflict.data.records], [409, 'conflict', [current]])
+    assert.equal((await bootstrap()).cursor, ack.cursor)
+  })
+
   await t.test('incremental pull resumes across pages after concurrent writes, retaining whole transactions', async () => {
     const baseline = await bootstrap()
     const operations = Array.from({ length: 65 }, () => {
@@ -367,6 +397,29 @@ test('two isolated ledgers sync through the running PostgreSQL API', async t => 
     }
     success(await add(second))
     assert.deepEqual(success(await setInstallmentVoided(second.id, true)).changedIds, [first.id, second.id])
+  })
+
+  await t.test('legacy field casing preserves replay and installment checks across batches', async () => {
+    const installmentId = randomUUID().replaceAll('-', '')
+    const baseEntry = entry(platformId, 'installment', '旧客户端分期')
+    const { title: Title, ...fields } = baseEntry
+    const first = { ...fields, Title, InstallmentId: installmentId, installmentIndex: 1, installmentCount: 2 }
+    const add = value => operation([change('entry', value.id, value)])
+    const original = add(first)
+    const ack = success(await push(original))
+    assert.equal(ack.records[0].value.title, Title)
+    assert.equal(ack.records[0].value.installmentId, installmentId)
+    assert.deepEqual(success(await push(original)), ack)
+
+    const next = { ...baseEntry, id: randomUUID(), installmentId, installmentIndex: 2, installmentCount: 2, month: '2027-01' }
+    for (const bad of [{ ...next, installmentIndex: 1, month: first.month }, { ...next, month: '2027-02' }]) {
+      const rejected = await push(add(bad))
+      assert.equal(rejected.status, 400)
+      assert.equal(rejected.data.code, 'invalid_installment')
+      assert.equal((await bootstrap()).cursor, ack.cursor)
+    }
+    success(await push(add(next)))
+    assert.deepEqual(success(await setInstallmentVoided(first.id, true)).changedIds, [first.id, next.id])
   })
 
   await t.test('voided estimates survive sync, reject confirmation, and conflict with an offline edit', async () => {
