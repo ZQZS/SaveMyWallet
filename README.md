@@ -35,6 +35,7 @@ npm run tauri -- dev
 
 | 想了解什么 | 从这里开始 |
 | --- | --- |
+| 后端项目如何分工，账单、分期与预算如何存储 | [后端结构与开发指南](backend/docs/architecture.md) · [PostgreSQL 数据库定义](backend/docs/database.md) |
 | Windows 和安卓怎么连接同一本账，分期重试与补款冲突如何处理 | [后端启动](backend/README.md) · [同步接口与冲突处理](backend/docs/sync.md) |
 | 一次勾选如何写入 SQLite，改动会影响什么，如何验证 | [项目开发指南](docs/development.md) |
 | 各版本交付了什么，下一个里程碑如何验收 | [开发里程碑](docs/milestones.md) |

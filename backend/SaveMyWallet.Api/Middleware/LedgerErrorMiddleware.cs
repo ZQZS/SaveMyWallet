@@ -23,5 +23,11 @@ internal static class LedgerErrorMiddleware
             context.Response.StatusCode = error.Status;
             await context.Response.WriteAsJsonAsync(new LedgerErrorQueryResultDto(error.Code, error.Message));
         }
+        catch (BadHttpRequestException error) when (error.StatusCode == StatusCodes.Status400BadRequest)
+        {
+            context.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await context.Response.WriteAsJsonAsync(new LedgerErrorQueryResultDto("invalid_request",
+                "The request does not match the endpoint contract."));
+        }
     }
 }

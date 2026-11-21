@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
+using SaveMyWallet.Dto;
 using SaveMyWallet.Dto.EntityDto;
 
 namespace SaveMyWallet.Infrastructure.Persistence;
@@ -16,7 +18,11 @@ internal sealed class LedgerDb(DbContextOptions<LedgerDb> options) : DbContext(o
         ledgers.HasKey(x => x.LedgerId);
         var records = model.Entity<StoredRecordEntityDto>().ToTable("smw_records");
         records.HasKey(x => new { x.LedgerId, x.Kind, x.Id });
-        records.Property(x => x.Value).HasColumnType("jsonb");
+        records.Property(x => x.Kind).HasConversion(LowercaseEnum<SyncRecordKind>());
+        records.Property(x => x.BillKind).HasConversion(LowercaseEnum<BillKind>());
+        records.Property(x => x.BillStatus).HasConversion(LowercaseEnum<BillStatus>());
+        records.HasIndex(x => new { x.LedgerId, x.InstallmentId, x.InstallmentIndex })
+            .IsUnique().HasFilter("\"InstallmentId\" IS NOT NULL").HasDatabaseName("smw_records_installment_period");
         var batches = model.Entity<ChangeBatchEntityDto>().ToTable("smw_changes");
         batches.HasKey(x => new { x.LedgerId, x.Cursor });
         batches.Property(x => x.Records).HasColumnType("jsonb");
@@ -25,4 +31,7 @@ internal sealed class LedgerDb(DbContextOptions<LedgerDb> options) : DbContext(o
         receipts.Property(x => x.Request).HasColumnType("jsonb");
         receipts.Property(x => x.Response).HasColumnType("jsonb");
     }
+
+    private static ValueConverter<T, string> LowercaseEnum<T>() where T : struct, Enum =>
+        new(value => value.ToString().ToLowerInvariant(), text => Enum.Parse<T>(text, true));
 }

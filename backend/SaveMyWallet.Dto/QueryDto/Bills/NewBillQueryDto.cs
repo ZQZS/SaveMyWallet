@@ -8,7 +8,7 @@ public sealed class NewBillQueryDto(
     string Title,
     string Month,
     long AmountCents,
-    string Kind,
+    BillKind Kind,
     uint InstallmentCount,
     long? TotalCents = null,
     long? DepositCents = null,
@@ -27,7 +27,7 @@ public sealed class NewBillQueryDto(
     public long AmountCents { get; init; } = AmountCents;
 
     [JsonRequired]
-    public string Kind { get; init; } = Kind;
+    public BillKind Kind { get; init; } = Kind;
 
     [JsonRequired]
     public uint InstallmentCount { get; init; } = InstallmentCount;

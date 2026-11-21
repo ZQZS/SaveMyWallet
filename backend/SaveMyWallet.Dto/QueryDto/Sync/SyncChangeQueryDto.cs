@@ -1,20 +1,15 @@
-using System.Text.Json;
 using System.Text.Json.Serialization;
+using SaveMyWallet.Dto.QueryResultDto;
 
 namespace SaveMyWallet.Dto.QueryDto;
 
-public class SyncChangeQueryDto(string Kind, string Id, string? BaseVersion, JsonElement? Before, JsonElement? After) : QueryBase
+[JsonConverter(typeof(SyncChangeQueryDtoConverter))]
+public sealed class SyncChangeQueryDto(SyncRecordKind kind, string id, string? baseVersion,
+    LedgerValueQueryResultDto? before, LedgerValueQueryResultDto? after) : QueryBase
 {
-    public string Kind { get; init; } = Kind;
-
-    public string Id { get; init; } = Id;
-
-    [JsonRequired]
-    public string? BaseVersion { get; init; } = BaseVersion;
-
-    [JsonRequired]
-    public JsonElement? Before { get; init; } = Before;
-
-    [JsonRequired]
-    public JsonElement? After { get; init; } = After;
+    public SyncRecordKind Kind { get; } = kind;
+    public string Id { get; } = id;
+    public string? BaseVersion { get; } = baseVersion;
+    public LedgerValueQueryResultDto? Before { get; } = before;
+    public LedgerValueQueryResultDto? After { get; } = after;
 }

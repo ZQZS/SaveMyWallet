@@ -65,9 +65,10 @@ test('two isolated ledgers sync through the running PostgreSQL API', async t => 
   const platformId = platform.id
 
   await t.test('committed request with a lost acknowledgement creates twelve stable installments exactly once', async () => {
+    const installmentId = randomUUID().replaceAll('-', '')
     const installments = Array.from({ length: 12 }, (_, i) => {
       const value = { ...entry(platformId, 'installment', '离线分期'), amountCents: 12800,
-        month: i ? '2027-' + String(i).padStart(2, '0') : '2026-12', installmentIndex: i + 1, installmentCount: 12 }
+        month: i ? '2027-' + String(i).padStart(2, '0') : '2026-12', installmentId, installmentIndex: i + 1, installmentCount: 12 }
       return change('entry', value.id, value)
     })
     const op = operation(installments)
@@ -130,31 +131,42 @@ test('two isolated ledgers sync through the running PostgreSQL API', async t => 
     assert.deepEqual(await bootstrap(), before)
   })
 
-  await t.test('sync preserves strict record fields and compares the original replay and conflict payloads', async () => {
+  await t.test('typed sync changes reject invalid shapes atomically and distinguish replay from a stale baseline', async () => {
     const value = entry(platformId, 'single', '同步字段校验')
+    const good = entry(platformId, 'single', '同批有效记录')
     const baseline = await bootstrap()
-    for (const [fields, code] of [
-      [{ installmentIndex: undefined }, 'invalid_record'],
-      [{ extra: true }, 'invalid_record'],
-      [{ amountCents: String(value.amountCents) }, 'invalid_number'],
-      [{ installmentId: null }, 'invalid_field'],
-      [{ depositCents: null }, 'invalid_number'],
-      [{ voided: null }, 'invalid_voided'],
+    for (const fields of [
+      { installmentIndex: undefined }, { extra: true }, { amountCents: String(value.amountCents) },
+      { installmentId: null }, { depositCents: null }, { voided: null },
+      { title: undefined, Title: value.title }, { title: null }, { InstallmentId: 'f'.repeat(32) },
+      { kind: 'Single' }, { kind: 'debit' }, { kind: 0 }, { status: 'Due' }, { status: 'cancelled' }, { status: 1 },
     ]) {
-      const result = await push(operation([change('entry', value.id, { ...value, ...fields })]))
-      assert.deepEqual([result.status, result.data.code], [400, code])
+      const result = await push(operation([change('entry', good.id, good), change('entry', value.id, { ...value, ...fields })]))
+      assert.deepEqual([result.status, result.data?.code], [400, 'invalid_request'], JSON.stringify(fields))
+    }
+    for (const invalid of [
+      change('Entry', value.id, value), change(1, value.id, value), change('invalid', value.id, value),
+      change('platform', 'p.bad', value), change('setting', 'warningFloorCents', { cents: 1200 }),
+      change('override', '2034-05', '0'),
+      { ...change('entry', value.id, value), before: undefined },
+      { ...change('entry', value.id, value), baseVersion: undefined, BaseVersion: null },
+      { ...change('entry', value.id, value), extra: true },
+      { ...change('entry', value.id, value), before: { ...value, extra: true } },
+    ]) {
+      const result = await push(operation([change('entry', good.id, good), invalid]))
+      assert.deepEqual([result.status, result.data?.code], [400, 'invalid_request'])
     }
     assert.deepEqual(await bootstrap(), baseline)
 
     const op = operation([change('entry', value.id, value)])
     const ack = success(await push(op))
     const alteredReplay = structuredClone(op)
-    alteredReplay.changes[0].after.extra = true
+    alteredReplay.changes[0].after.amountCents++
     const replay = await push(alteredReplay)
     assert.deepEqual([replay.status, replay.data.code], [409, 'replay_mismatch'])
 
     const current = ack.records[0]
-    const stale = { ...current, value: { ...value, extra: true } }
+    const stale = { ...current, value: { ...value, amountCents: value.amountCents + 1 } }
     const conflict = await push(operation([change('entry', value.id, { ...value, status: 'paid' }, stale)]))
     assert.deepEqual([conflict.status, conflict.data.code, conflict.data.records], [409, 'conflict', [current]])
     assert.equal((await bootstrap()).cursor, ack.cursor)
@@ -277,7 +289,7 @@ test('two isolated ledgers sync through the running PostgreSQL API', async t => 
 
   await t.test('voiding and restoring one installment preserves the paid record, its sibling and retry receipts', async () => {
     const first = { ...entry(platformId, 'installment', '分期作废'), id: '账/单%2F' + randomUUID(),
-      status: 'paid', installmentIndex: 1, installmentCount: 2 }
+      status: 'paid', installmentId: randomUUID().replaceAll('-', ''), installmentIndex: 1, installmentCount: 2 }
     const second = { ...first, id: randomUUID(), status: 'due', month: '2027-01', installmentIndex: 2 }
     const created = success(await push(operation([first, second].map(value => change('entry', value.id, value)))))
     const path = '/bills/' + encodeURIComponent(first.id) + '/voided'
@@ -336,9 +348,9 @@ test('two isolated ledgers sync through the running PostgreSQL API', async t => 
     assert.equal((await bootstrap()).cursor, restored.cursor)
   })
 
-  await t.test('legacy periods require a complete unambiguous schedule, including for escaped entry IDs', async () => {
-    const first = { ...entry(platformId, 'installment', '旧分期整笔'), id: '账/单%2F' + randomUUID(),
-      installmentIndex: 1, installmentCount: 2 }
+  await t.test('installments require a group ID and support whole-series operations with escaped entry IDs', async () => {
+    const first = { ...entry(platformId, 'installment', '完整分期'), id: '账/单%2F' + randomUUID(),
+      installmentId: randomUUID().replaceAll('-', ''), installmentIndex: 1, installmentCount: 2 }
     const second = { ...first, id: randomUUID(), month: '2027-01', installmentIndex: 2 }
     const add = value => push(operation([change('entry', value.id, value)]))
     const unavailable = async id => {
@@ -348,13 +360,16 @@ test('two isolated ledgers sync through the running PostgreSQL API', async t => 
       assert.equal(result.data.code, 'installment_group_unavailable')
       assert.equal((await bootstrap()).cursor, cursor)
     }
+    const ungrouped = { ...first }
+    delete ungrouped.installmentId
+    const before = await bootstrap()
+    assert.equal((await add(ungrouped)).status, 400)
+    assert.deepEqual(await bootstrap(), before)
     success(await add(first))
     await unavailable(first.id)
     success(await add(second))
     assert.deepEqual(success(await setInstallmentVoided(first.id, true)).changedIds, [first.id, second.id])
     assert.deepEqual(success(await setInstallmentVoided(second.id, false)).changedIds, [first.id, second.id])
-    success(await add({ ...first, id: randomUUID() }))
-    await unavailable(second.id)
     const single = entry(platformId, 'single', '非分期')
     success(await add(single))
     await unavailable(single.id)
@@ -399,27 +414,39 @@ test('two isolated ledgers sync through the running PostgreSQL API', async t => 
     assert.deepEqual(success(await setInstallmentVoided(second.id, true)).changedIds, [first.id, second.id])
   })
 
-  await t.test('legacy field casing preserves replay and installment checks across batches', async () => {
-    const installmentId = randomUUID().replaceAll('-', '')
-    const baseEntry = entry(platformId, 'installment', '旧客户端分期')
-    const { title: Title, ...fields } = baseEntry
-    const first = { ...fields, Title, InstallmentId: installmentId, installmentIndex: 1, installmentCount: 2 }
-    const add = value => operation([change('entry', value.id, value)])
-    const original = add(first)
-    const ack = success(await push(original))
-    assert.equal(ack.records[0].value.title, Title)
-    assert.equal(ack.records[0].value.installmentId, installmentId)
-    assert.deepEqual(success(await push(original)), ack)
-
-    const next = { ...baseEntry, id: randomUUID(), installmentId, installmentIndex: 2, installmentCount: 2, month: '2027-01' }
-    for (const bad of [{ ...next, installmentIndex: 1, month: first.month }, { ...next, month: '2027-02' }]) {
-      const rejected = await push(add(bad))
-      assert.equal(rejected.status, 400)
-      assert.equal(rejected.data.code, 'invalid_installment')
-      assert.equal((await bootstrap()).cursor, ack.cursor)
+  await t.test('snapshots round-trip typed values and preserve zero amounts and versioned deletions', async () => {
+    const baseline = await bootstrap()
+    const platform = { id: randomUUID(), name: '类型往返测试' }
+    const bill = { ...entry(platform.id, 'installment', '快照还款'), installmentId: randomUUID().replaceAll('-', ''),
+      installmentCount: 1, installmentIndex: 1 }
+    const month = '2034-04'
+    const setting = baseline.records.find(r => r.kind === 'setting' && r.id === 'warningFloorCents')
+    const op = operation([
+      change('entry', bill.id, bill), change('platform', platform.id, platform),
+      change('setting', 'warningFloorCents', 12345, setting), change('override', month, 0),
+    ])
+    const ack = success(await push(op))
+    assert.deepEqual(success(await push(op)), ack)
+    assert.deepEqual(ack.records.map(r => r.value), [bill, platform, 12345, 0])
+    const snapshots = [(await bootstrap()).records, success(await request('/sync/pull?cursor=' + baseline.cursor)).records]
+    for (const records of snapshots) {
+      for (const record of ack.records)
+        assert.deepEqual(records.find(r => r.kind === record.kind && r.id === record.id), record)
     }
-    success(await push(add(next)))
-    assert.deepEqual(success(await setInstallmentVoided(first.id, true)).changedIds, [first.id, next.id])
+    const current = snapshots[0].find(r => r.kind === 'entry' && r.id === bill.id)
+    const currentOverride = snapshots[0].find(r => r.kind === 'override' && r.id === month)
+    const paid = { ...current.value, status: 'paid' }
+    const update = operation([change('entry', bill.id, paid, current), change('override', month, null, currentOverride)])
+    const saved = success(await push(update))
+    assert.equal(saved.cursor, ack.cursor + 1)
+    assert.deepEqual(saved.records.map(r => r.value), [paid, null])
+    const tombstone = (await bootstrap()).records.find(r => r.kind === 'override' && r.id === month)
+    assert.deepEqual(tombstone, { kind: 'override', id: month, value: null, version: update.operationId })
+    assert.equal(Object.hasOwn(success(await request('/ledger')).salaryOverrides, month), false)
+    const stale = await push(operation([change('entry', bill.id, bill, current)]))
+    assert.deepEqual([stale.status, stale.data.code, stale.data.records], [409, 'conflict', [saved.records[0]]])
+    assert.deepEqual(success(await push(update)), saved)
+    assert.equal((await bootstrap()).cursor, saved.cursor)
   })
 
   await t.test('voided estimates survive sync, reject confirmation, and conflict with an offline edit', async () => {
@@ -501,13 +528,14 @@ test('two isolated ledgers sync through the running PostgreSQL API', async t => 
     const ack = success(await push(op))
     assert.deepEqual(success(await push(op)), ack)
     const current = ack.records[0]
-    const { depositCents, ...legacy } = estimate
-    const legacyBefore = { ...current, value: legacy }
-    assert.equal((await edit({ ...legacy, status: 'due' }, legacyBefore)).status, 409)
-    assert.equal((await edit({ ...legacy, voided: true }, current)).status, 400)
+    const withoutDeposit = { ...estimate }
+    delete withoutDeposit.depositCents
+    const wrongBefore = { ...current, value: withoutDeposit }
+    assert.equal((await edit({ ...withoutDeposit, status: 'due' }, wrongBefore)).status, 409)
+    assert.equal((await edit({ ...withoutDeposit, voided: true }, current)).status, 400)
     const voided = success(await edit({ ...estimate, voided: true }, current)).records[0]
     const restored = success(await edit(estimate, voided)).records[0]
-    const corrected = { ...legacy, status: 'due' }
+    const corrected = { ...withoutDeposit, status: 'due' }
     success(await edit(corrected, restored))
     const pulled = success(await request('/sync/pull?cursor=' + ack.cursor)).records
     assert.deepEqual(pulled.find(record => record.id === estimate.id).value, corrected)

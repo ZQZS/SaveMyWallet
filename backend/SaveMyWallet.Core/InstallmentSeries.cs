@@ -1,3 +1,4 @@
+using SaveMyWallet.Dto;
 using SaveMyWallet.Dto.EntityDto;
 using SaveMyWallet.Dto.QueryResultDto;
 
@@ -13,26 +14,17 @@ internal static class InstallmentSeries
     }
 
     internal static IEnumerable<(SyncRecordEntityDto Row, BillEntryQueryResultDto Entry)> Find(
-        IReadOnlyList<SyncRecordEntityDto> rows, SyncRecordEntityDto selected)
+        IReadOnlyList<SyncRecordEntityDto> rows, BillEntryQueryResultDto selected)
     {
-        var selectedEntry = LedgerValues.ReadEntry(selected.Value);
-        if (selectedEntry.Kind != "installment") throw Unavailable();
-        var schedule = Schedule.From(selectedEntry);
+        if (selected.Kind != BillKind.Installment || selected.InstallmentId is null) throw Unavailable();
         var periods = new SortedDictionary<int, (SyncRecordEntityDto, BillEntryQueryResultDto)>();
         foreach (var row in rows)
         {
-            if (row.Kind != "entry" || row.Value is null) continue;
-            var member = ReferenceEquals(row, selected) ? selectedEntry : LedgerValues.ReadEntry(row.Value);
-            if (member.Kind != "installment" || member.InstallmentId != selectedEntry.InstallmentId) continue;
-            if (Schedule.From(member) != schedule)
-            {
-                if (selectedEntry.InstallmentId is not null) throw Unavailable();
-                continue;
-            }
+            if (row.Value is not BillEntryQueryResultDto member || member.InstallmentId != selected.InstallmentId) continue;
             if (!periods.TryAdd(member.InstallmentIndex!.Value, (row, member))) throw Unavailable();
         }
-        // Individual records were validated on write, so every index is between 1 and Count.
-        if (periods.Count != schedule.Count) throw Unavailable();
+        // A series may have been submitted in separate batches or entered from a later period.
+        if (periods.Count != selected.InstallmentCount) throw Unavailable();
         return periods.Values;
     }
 
@@ -41,9 +33,8 @@ internal static class InstallmentSeries
 
     internal static void ValidateNewMembers(IReadOnlyList<SyncRecordEntityDto> current, IReadOnlyList<BillEntryQueryResultDto> added)
     {
-        var seriesIds = added.Select(entry => entry.InstallmentId!).ToHashSet();
-        var existing = current.Where(row => row.Kind == "entry" && row.Value is not null)
-            .Select(row => LedgerValues.ReadEntry(row.Value))
+        var seriesIds = added.Select(entry => entry.InstallmentId!).ToHashSet(StringComparer.Ordinal);
+        var existing = current.Select(row => row.Value).OfType<BillEntryQueryResultDto>()
             .Where(entry => entry.InstallmentId is { } id && seriesIds.Contains(id));
         foreach (var series in added.Concat(existing).GroupBy(entry => entry.InstallmentId))
         {

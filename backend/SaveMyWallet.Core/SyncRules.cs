@@ -1,4 +1,5 @@
 using System.Text;
+using SaveMyWallet.Dto;
 using SaveMyWallet.Dto.QueryDto;
 
 namespace SaveMyWallet.Core;
@@ -21,11 +22,10 @@ public static class SyncRules
 
     public static void ValidateEnvelope(IReadOnlyList<SyncChangeQueryDto> changes)
     {
-        var keys = new HashSet<(string, string)>();
+        var keys = new HashSet<(SyncRecordKind, string)>();
         foreach (var change in changes)
         {
-            if (change is null || change.Kind is not ("entry" or "platform" or "setting" or "override") ||
-                string.IsNullOrWhiteSpace(change.Id) || change.Id != change.Id.Trim() || change.Id.Contains('\0') ||
+            if (change is null || string.IsNullOrWhiteSpace(change.Id) || change.Id != change.Id.Trim() || change.Id.Contains('\0') ||
                 Encoding.UTF8.GetByteCount(change.Id) > 1024 || !keys.Add((change.Kind, change.Id)) ||
                 change.BaseVersion is not null && !LedgerRules.IsSafeKey(change.BaseVersion, 128))
                 throw new LedgerException(400, "invalid_changes", "Invalid or repeated record key or version.");

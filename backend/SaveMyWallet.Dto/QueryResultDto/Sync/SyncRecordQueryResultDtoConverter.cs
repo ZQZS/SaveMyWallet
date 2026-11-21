@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using SaveMyWallet.Dto.Serialization;
 
 namespace SaveMyWallet.Dto.QueryResultDto;
 
@@ -10,21 +11,15 @@ internal sealed class SyncRecordQueryResultDtoConverter : JsonConverter<SyncReco
     {
         using var document = JsonDocument.ParseValue(ref reader);
         var record = document.RootElement;
-        var kindProperty = options.PropertyNamingPolicy?.ConvertName(nameof(SyncRecordQueryResultDto.Kind))
-            ?? nameof(SyncRecordQueryResultDto.Kind);
-        if (record.ValueKind != JsonValueKind.Object || !record.TryGetProperty(kindProperty, out var kind)
-            || kind.ValueKind != JsonValueKind.String)
-            throw new JsonException("A sync record must specify its kind.");
-
-        return kind.GetString() switch
+        return LedgerJson.ReadKind(record) switch
         {
-            "platform" => record.Deserialize<SyncRecordQueryResultDto<PlatformQueryResultDto?>>(options)!,
-            "entry" => record.Deserialize<SyncRecordQueryResultDto<BillEntryQueryResultDto?>>(options)!,
-            "setting" or "override" => record.Deserialize<SyncRecordQueryResultDto<long?>>(options)!,
+            SyncRecordKind.Platform => record.Deserialize<SyncRecordQueryResultDto<PlatformQueryResultDto?>>(LedgerJson.Options)!,
+            SyncRecordKind.Entry => record.Deserialize<SyncRecordQueryResultDto<BillEntryQueryResultDto?>>(LedgerJson.Options)!,
+            SyncRecordKind.Setting or SyncRecordKind.Override => record.Deserialize<SyncRecordQueryResultDto<long?>>(LedgerJson.Options)!,
             _ => throw new JsonException("Unknown sync record kind.")
         };
     }
 
     public override void Write(Utf8JsonWriter writer, SyncRecordQueryResultDto value, JsonSerializerOptions options) =>
-        JsonSerializer.Serialize(writer, value, value.GetType(), options);
+        JsonSerializer.Serialize(writer, value, value.GetType(), LedgerJson.Options);
 }

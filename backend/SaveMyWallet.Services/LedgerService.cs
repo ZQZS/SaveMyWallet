@@ -2,8 +2,10 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using SaveMyWallet.Constant;
 using SaveMyWallet.Core;
+using SaveMyWallet.Dto;
 using SaveMyWallet.Dto.QueryDto;
 using SaveMyWallet.Dto.QueryResultDto;
+using SaveMyWallet.Dto.Serialization;
 using SaveMyWallet.Interfaces;
 
 namespace SaveMyWallet.Services;
@@ -15,7 +17,7 @@ public sealed class LedgerService(ISyncStore store) : ILedgerService
         var snapshot = await store.BootstrapAsync(ledgerId, ct);
         var records = snapshot.Records;
         var amounts = records.OfType<SyncRecordQueryResultDto<long?>>().Where(r => r.Value.HasValue);
-        var settings = amounts.Where(r => r.Kind == "setting").ToDictionary(r => r.Id, r => r.Value!.Value);
+        var settings = amounts.Where(r => r.Kind == SyncRecordKind.Setting).ToDictionary(r => r.Id, r => r.Value!.Value);
         return new LedgerSnapshotQueryResultDto(
             records.OfType<SyncRecordQueryResultDto<PlatformQueryResultDto?>>()
                 .Select(r => r.Value).OfType<PlatformQueryResultDto>().ToArray(),
@@ -24,7 +26,7 @@ public sealed class LedgerService(ISyncStore store) : ILedgerService
             new LedgerSettingsQueryResultDto(
                 settings.GetValueOrDefault(LedgerConstants.DefaultSalary),
                 settings.GetValueOrDefault(LedgerConstants.WarningFloor)),
-            amounts.Where(r => r.Kind == "override").ToDictionary(r => r.Id, r => r.Value!.Value));
+            amounts.Where(r => r.Kind == SyncRecordKind.Override).ToDictionary(r => r.Id, r => r.Value!.Value));
     }
 
     public Task<PlatformCreatedQueryResultDto> CreatePlatformAsync(string ledgerId, string operationId, NewPlatformQueryDto input, CancellationToken ct) =>
@@ -62,7 +64,6 @@ public sealed class LedgerService(ISyncStore store) : ILedgerService
     private static string Fingerprint<T>(string operationId, string action, T input)
     {
         SyncRules.CheckOperationId(operationId);
-        // Existing receipts use these action strings and the default JSON property casing.
-        return Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new { action, input })));
+        return Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new { action, input }, LedgerJson.Options)));
     }
 }

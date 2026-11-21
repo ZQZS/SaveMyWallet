@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using SaveMyWallet.Constant;
+using SaveMyWallet.Dto;
 using SaveMyWallet.Dto.EntityDto;
 using SaveMyWallet.Dto.QueryDto;
 using SaveMyWallet.Dto.QueryResultDto;
@@ -21,20 +22,21 @@ public static class LedgerRules
     {
         // Platform IDs and names must be checked against the state at the end of the
         // operation: a first-device upload may contain both platforms and their bills.
-        var platforms = current.Where(r => r.Kind == "platform" && r.Value is not null)
-            .ToDictionary(r => r.Id, r => LedgerValues.ReadPlatform(r.Value).Name, StringComparer.Ordinal);
+        var platforms = current.Select(r => r.Value).OfType<PlatformQueryResultDto>()
+            .ToDictionary(p => p.Id, p => p.Name, StringComparer.Ordinal);
         var previous = current.ToDictionary(r => (r.Kind, r.Id));
         foreach (var change in changes)
         {
             ValidateId(change.Id);
-            if (change.Kind != "platform") continue;
-            var platform = LedgerValues.ReadPlatform(change.After);
+            if (change.Kind != SyncRecordKind.Platform) continue;
+            if (change.After is not PlatformQueryResultDto platform)
+                throw new LedgerException(400, "invalid_record", "A platform record is required.");
             Require(platform.Id == change.Id, "invalid_id", "Platform IDs must match.");
             Require(platform.Name == CleanText(platform.Name, 40), "invalid_name", "Platform names must be trimmed.");
             platforms[change.Id] = platform.Name;
         }
 
-        // SQLite NOCASE and the v1 backup reader case-fold only ASCII letters.
+        // Match the native ledger's SQLite NOCASE collation.
         var names = new HashSet<string>(StringComparer.Ordinal);
         foreach (var name in platforms.Values)
         {
@@ -47,25 +49,26 @@ public static class LedgerRules
         {
             switch (change.Kind)
             {
-                case "platform":
+                case SyncRecordKind.Platform:
                     break;
-                case "entry":
+                case SyncRecordKind.Entry:
                     previous.TryGetValue((change.Kind, change.Id), out var old);
-                    var entry = LedgerValues.ReadEntry(change.After);
+                    if (change.After is not BillEntryQueryResultDto entry)
+                        throw new LedgerException(400, "invalid_record", "A bill record is required.");
                     ValidateEntry(change.Id, entry, platforms);
-                    if (old?.Value is { } previousValue)
-                        ValidateTransition(LedgerValues.ReadEntry(previousValue), entry);
-                    else if (entry.InstallmentId is not null)
+                    if (old?.Value is BillEntryQueryResultDto previousEntry)
+                        ValidateTransition(previousEntry, entry);
+                    else if (entry.Kind == BillKind.Installment)
                         newInstallments.Add(entry);
                     break;
-                case "setting":
+                case SyncRecordKind.Setting:
                     Require(change.Id is LedgerConstants.DefaultSalary or LedgerConstants.WarningFloor,
                         "invalid_setting", "Unknown budget setting.");
-                    ValidateAmount(LedgerValues.ReadAmount(change.After), 0);
+                    ValidateBudgetAmount(change.After);
                     break;
-                case "override":
+                case SyncRecordKind.Override:
                     Month(change.Id);
-                    if (change.After is not null) ValidateAmount(LedgerValues.ReadAmount(change.After), 0);
+                    if (change.After is not null) ValidateBudgetAmount(change.After);
                     break;
                 default:
                     throw new LedgerException(400, "invalid_kind", "Unknown record kind.");
@@ -86,25 +89,23 @@ public static class LedgerRules
         Require(platforms.ContainsKey(entry.PlatformId), "unknown_platform", "Choose an existing platform.");
         Require(entry.Title == CleanText(entry.Title, 120), "invalid_title", "Bill titles must be trimmed.");
         var month = Month(entry.Month);
-        if (entry.InstallmentId is { } installmentId)
-        {
-            Require(entry.Kind == "installment" && installmentId.Length == 32 &&
-                    installmentId.All(c => char.IsAsciiDigit(c) || c is >= 'a' and <= 'f'),
-                    "invalid_installment", "An installment ID must be 32 lowercase hexadecimal characters.");
-        }
-        Require(entry.Kind is "single" or "installment" or "estimate", "invalid_kind", "Unknown bill kind.");
-        Require((entry.Status is "due" or "paid") || (entry.Status == "estimated" && entry.Kind == "estimate"),
+        Require(entry.Voided is not false, "invalid_voided", "Set voided to true for a voided bill. Omit it for an active bill.");
+        Require(entry.Status is BillStatus.Due or BillStatus.Paid ||
+                (entry.Status == BillStatus.Estimated && entry.Kind == BillKind.Estimate),
                 "invalid_status", "Invalid status for this bill kind.");
-        Require(entry.DepositCents is null || (entry.Kind == "estimate" && entry.DepositCents > 0),
+        Require(entry.DepositCents is null || (entry.Kind == BillKind.Estimate && entry.DepositCents > 0),
                 "invalid_deposit", "Only estimates may include a positive deposit. Omit a zero deposit.");
-        if (entry.Kind == "estimate")
+        if (entry.Kind == BillKind.Estimate)
         {
             ValidateEstimateAmounts(entry.AmountCents, entry.DepositCents ?? 0);
-            Require(entry.AmountCents != 0 || entry.Status != "due", "invalid_status", "A confirmed fully prepaid estimate must be paid.");
+            Require(entry.AmountCents != 0 || entry.Status != BillStatus.Due, "invalid_status", "A confirmed fully prepaid estimate must be paid.");
         }
         else ValidateAmount(entry.AmountCents, 1);
-        if (entry.Kind == "installment")
+        if (entry.Kind == BillKind.Installment)
         {
+            Require(entry.InstallmentId is { Length: 32 } idValue &&
+                    idValue.All(c => char.IsAsciiDigit(c) || c is >= 'a' and <= 'f'),
+                    "invalid_installment", "An installment ID must be 32 lowercase hexadecimal characters.");
             if (entry.InstallmentCount is not { } count || entry.InstallmentIndex is not { } index)
                 throw new LedgerException(400, "invalid_number", "An integer is required.");
             Require(count is >= 1 and <= 120 && index >= 1 && index <= count,
@@ -115,8 +116,8 @@ public static class LedgerRules
         }
         else
         {
-            Require(entry.InstallmentIndex is null && entry.InstallmentCount is null,
-                    "invalid_installment", "Only installment bills have period numbers.");
+            Require(entry.InstallmentIndex is null && entry.InstallmentCount is null && entry.InstallmentId is null,
+                    "invalid_installment", "Only installment bills have an installment ID and period numbers.");
         }
     }
 
@@ -131,9 +132,9 @@ public static class LedgerRules
                     "invalid_transition", "Voiding or restoring a bill must preserve its details and payment status.");
 
         Require(sameSchedule && entry.InstallmentId == previous.InstallmentId, "immutable_entry", "The bill identity and installment schedule are fixed.");
-        if (entry.Kind != "estimate")
+        if (entry.Kind != BillKind.Estimate)
             Require(sameDetails, "immutable_entry", "Only payment status can change on this bill.");
-        Require(entry.Status != "estimated" || previous.Status == "estimated",
+        Require(entry.Status != BillStatus.Estimated || previous.Status == BillStatus.Estimated,
                 "invalid_transition", "A confirmed bill cannot become an estimate again.");
     }
 
@@ -159,6 +160,13 @@ public static class LedgerRules
 
     private static void ValidateAmount(long cents, long minimum) =>
         Require(cents >= minimum && cents <= LedgerConstants.MaxCents, "invalid_amount", "Amount is outside the supported range in cents.");
+
+    private static void ValidateBudgetAmount(LedgerValueQueryResultDto? value)
+    {
+        if (value is not AmountQueryResultDto amount)
+            throw new LedgerException(400, "invalid_number", "An integer amount in cents is required.");
+        ValidateAmount(amount.Cents, 0);
+    }
 
     internal static void ValidateEstimateAmounts(long balance, long deposit, long? total = null)
     {

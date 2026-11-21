@@ -1,11 +1,11 @@
-using System.Text.Json;
+using SaveMyWallet.Dto.QueryResultDto;
 
 namespace SaveMyWallet.Dto.EntityDto;
 
-public class SyncRecordEntityDto(string Kind, string Id, JsonElement? Value, string? Version) : EntityBase
+public sealed class SyncRecordEntityDto(SyncRecordKind kind, string id, LedgerValueQueryResultDto? value, string? version) : EntityBase
 {
-    public string Kind { get; init; } = Kind;
-    public string Id { get; init; } = Id;
-    public JsonElement? Value { get; init; } = Value;
-    public string? Version { get; init; } = Version;
+    public SyncRecordKind Kind { get; } = kind;
+    public string Id { get; } = id;
+    public LedgerValueQueryResultDto? Value { get; } = value;
+    public string? Version { get; } = version;
 }

@@ -2,33 +2,19 @@
 
 本服务使用 **ASP.NET Core 10、EF Core 10 和 PostgreSQL**。Windows 与安卓各自从本机 SQLite 读写。两台设备绑定同一服务上的同一账本后，可在联网时交换明细、还款状态和预算。断网录入的分期沿用本机分配的每一期 ID。两端把同一笔预计补款确认为不同金额或月份时，用户可以在设置中选择采用哪个版本。[同步协议与冲突处理](docs/sync.md)
 
-## 后端项目
+## 后端开发文档
 
-用 Visual Studio 打开[后端解决方案](SaveMyWallet.slnx)，或在仓库根目录运行 `dotnet build ./backend/SaveMyWallet.slnx` 构建所有项目。
-
-| 项目 | 职责 |
+| 文档 | 适合查阅的内容 |
 | --- | --- |
-| `SaveMyWallet.Api` | 启动 HTTP 服务、注册依赖、认证请求，将路由分派给业务服务。 |
-| `SaveMyWallet.Services` | 实现账本和同步用例，调用核心规则，通过存储接口读取快照或提交变更。 |
-| `SaveMyWallet.Core` | 生成账务命令的变更记录，校验金额、分期、状态转换和同步操作。 |
-| `SaveMyWallet.Constant` | 定义金额上限、预算设置键和同步分页大小，供业务规则、服务和存储实现共用。 |
-| `SaveMyWallet.Dto` | 定义持久化实体、请求与返回结果。具体 DTO 的名称后缀和公共命名空间按 `EntityDto`、`QueryDto`、`QueryResultDto` 三种类别区分。 |
-| `SaveMyWallet.Interfaces` | 定义账本服务、同步服务和同步存储的接口。 |
-| `SaveMyWallet.Infrastructure` | 用 EF Core 将数据库行类型映射到 PostgreSQL 表，实现存储接口，管理建表、事务、游标和幂等回执。 |
+| [结构与开发指南](docs/architecture.md) | 七个项目的依赖、DTO 约定、业务和数据访问的边界、如何扩展并验证一个字段。 |
+| [数据库定义](docs/database.md) | PostgreSQL 表和列、约束与索引、事务和版本管理。 |
+| [账本 API 与同步协议](docs/sync.md) | REST 与同步请求的字段、响应、错误、游标、重试和冲突处理。 |
 
-新增 DTO 时，使用普通 C# `class` 继承对应基类，并将文件放入业务子目录。基类和标记接口位于类别根目录。有响应体的 API 使用具名结果类，无响应体的写入接口返回 HTTP 204。
-
-| 类别目录 | 基类与接口 | 业务子目录 |
-| --- | --- | --- |
-| `EntityDto/` | `EntityBase` 实现 `IEntity` | `Ledger/` 存放账本头、当前记录和账务变更，`Sync/` 存放同步记录、变更批次和操作回执。 |
-| `QueryDto/` | `QueryBase` 实现 `IQuery` | `Bills/` 处理账单，`Platforms/` 处理平台，`Payments/` 处理还款，`Budget/` 处理预算，`Sync/` 处理同步。 |
-| `QueryResultDto/` | `QueryResultBase` 实现 `IQueryResult` | `Ledger/` 存放账本快照及设置，`Platforms/` 和 `Bills/` 存放平台、账单及变更结果，`Sync/` 存放同步结果与冲突，`Errors/` 存放通用错误响应。 |
-
-账单和平台的业务规则直接读写 `BillEntryQueryResultDto` 和 `PlatformQueryResultDto` 的属性，预算金额使用 `long`（单位为分）。扩展记录字段时，在对应类上声明属性，在 `LedgerRules` 中校验业务约束。`LedgerValues` 负责同步数据的类型转换，包括区分缺失字段与显式 `null`。同步请求与记录保留原始 JSON 值，用于核对离线编辑的旧快照和重试请求。
+解决方案使用 .NET 10 SDK。在仓库根目录运行 `dotnet build ./backend/SaveMyWallet.slnx -c Release` 可构建全部项目，也可以用 Visual Studio 打开[后端解决方案](SaveMyWallet.slnx)。
 
 ## 在 Windows 上启动开发服务
 
-需要 .NET 10 SDK、一套可以连接的 PostgreSQL 和一个专用数据库。API 首次启动会建立表结构，数据库角色需要建表权限。在有 PostgreSQL 管理权限的终端运行以下命令，可建立开发用角色和数据库。
+准备一套可连接的 PostgreSQL 和一个专用空数据库。API 首次启动会建立当前结构，数据库角色需要建表权限。已有其他版本结构时，为本版本创建独立数据库，并把连接串指向新库。以下命令可在有 PostgreSQL 管理权限的终端中建立开发用角色和数据库。
 
 ```powershell
 createuser -U postgres --pwprompt wallet_app
@@ -99,7 +85,7 @@ Invoke-RestMethod -Uri http://127.0.0.1:5180/sync/bootstrap -Headers $headers
 
 [协议文档](docs/sync.md)包含兼容 Axios 的账本接口、明细作废与恢复、同步请求与响应、版本与游标的区别、断线重试及人工裁决示例。
 
-在独立的测试数据库启动服务，设置两个不同令牌，分别映射到两个空测试账本。然后在仓库根目录运行黑盒集成测试。测试会写入测试数据，复跑时为这次运行配置新的空账本。
+在独立的测试数据库启动服务，用 `LedgerTokens__testA` 和 `LedgerTokens__testB` 分别配置两个空账本的令牌。在另一个 PowerShell 7 窗口切换到仓库根目录，设置对应的客户端环境变量后运行 Node.js 集成测试。测试会写入数据，每次复跑请使用新的空账本或新的专用测试数据库。
 
 ```powershell
 $env:SMW_TEST_URL = 'http://127.0.0.1:5180'
@@ -111,6 +97,7 @@ node --test backend/tests/sync.integration.mjs
 要验证两份独立 SQLite 均通过客户端的原生网络层与服务通信，另准备一个全新的空测试账本，在仓库根目录使用下列命令。此用例会模拟服务端成功提交后丢失回执、关闭并重开本地账本、重传分期和手动裁决两组补款冲突。
 
 ```powershell
+$env:SMW_TEST_URL = 'http://127.0.0.1:5180'
 $env:SMW_TEST_TOKEN = Read-Host '第三个空测试账本令牌' -MaskInput
 cargo test --manifest-path frontend/src-tauri/Cargo.toml two_native_sqlite_replicas_sync_through_the_live_postgres_api --lib -- --ignored
 ```
