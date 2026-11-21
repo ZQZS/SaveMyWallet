@@ -55,6 +55,8 @@ Windows 和安卓共用 Vue、TypeScript、Tauri 2 和 Rust 代码，每台设�
 
 提醒任务单独保存在本机。分钟间隔从首次触发的时间戳按实际经过的分钟数递推。每日随机提醒保存起止钟点和随机种子，按时段开始的本地日期计算触发分钟。前端、Windows 投递程序和安卓接收器使用同一组样例验证跨午夜的触发时间。所有渠道共用 31 天的重复间隔上限，以匹配 Windows 任务计划程序。[前端时间计算](../src/features/reminders/recurrence.ts) · [Windows 调度器的间隔范围](https://learn.microsoft.com/en-us/windows/win32/taskschd/taskschedulerschema-interval-repetitiontype-element)
 
+聊天使用独立的本机 IndexedDB，按聊天入口、角色 ID、账本月份和对话 ID 保存草稿及问答。选中的账单、待确认操作和进行中的模型请求只在当前窗口有效。已发送问答带有原来的分享范围，恢复后由当前勾选项决定哪些历史可发给模型。验证跨窗口写入与清除可运行 `node --experimental-strip-types --test tests/chat-storage.browser.mjs`，使用隔离的 Chromium 配置。[聊天存储](../src/features/pets/chatStorage.ts) · [会话与重试](../src/features/pets/chatHistory.ts)
+
 ## 接手一个变更
 
 **改系统设置或备份。** 从 [settingsRoutes.ts](../src/features/settings/settingsRoutes.ts) 找到对应子页，同时维护中英文词条。设备语言保存在本机 WebView 的 `savemywallet.locale` 偏好中。界面格式化使用 `formatMoney` 和 `formatMonth`，货币始终为人民币，平台名和款项名称按原文显示。

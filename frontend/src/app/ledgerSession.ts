@@ -17,6 +17,7 @@ export function createLedgerSession({ repository, calculateMonth }: LedgerServic
   const data = computed(() => snapshot.value && projectBillingMonths(snapshot.value, calendarMonth.value))
   const platformSummaries = computed(() => data.value ? summarizePlatforms(data.value) : null)
   const month = ref(calendarMonth.value)
+  let monthSelected = false
   const busy = ref(false)
   const needsReload = ref(false)
   const writeCount = ref(0)
@@ -28,6 +29,7 @@ export function createLedgerSession({ repository, calculateMonth }: LedgerServic
 
   function selectMonth(value: string) {
     if (!isMonth(value)) return
+    monthSelected = true
     month.value = value
     lastPayment.value = null
     notice.value = ''
@@ -135,6 +137,7 @@ export function createLedgerSession({ repository, calculateMonth }: LedgerServic
   }
 
   return { repository, calculateMonth, data, platformSummaries, calendarMonth, month, busy, needsReload, writeCount,
+    get hasSelectedMonth() { return monthSelected },
     error, notice, lastPayment, selectMonth, updateCalendarMonth, retryRead, commit, markPayments, undoPayment, invalidatePaymentUndo, reconcilePaymentUndo }
 }
 

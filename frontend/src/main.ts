@@ -10,6 +10,7 @@ import './shared/styles/base.css'
 import { locale, t } from './i18n'
 import { themeVariables, useAppearance } from './features/appearance/appearance'
 import { startReminders } from './features/reminders/useReminders'
+import { startChatPersistence } from './features/pets/chatLifecycle'
 
 const { style: appearance } = useAppearance()
 watchEffect(() => {
@@ -37,8 +38,11 @@ watchEffect(() => {
 void router.isReady().then(() => {
   app.mount('#app')
   const stopReminders = startReminders()
+  const stopChatPersistence = startChatPersistence()
   app.onUnmount(stopReminders)
+  app.onUnmount(stopChatPersistence)
   if (import.meta.hot) import.meta.hot.dispose(stopReminders)
+  if (import.meta.hot) import.meta.hot.dispose(stopChatPersistence)
   if ('__TAURI_INTERNALS__' in window) {
     const stop = startAutoSync(sync, session, canRefresh)
     app.onUnmount(stop)

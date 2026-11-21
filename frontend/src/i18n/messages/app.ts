@@ -1,5 +1,6 @@
 export const appMessages = {
   'zh-CN': {
+    'app.exitWithUnsavedChat': '有聊天内容尚未保存到本机。仍要退出吗？',
     'nav.ledger': '月度账本',
     'nav.platforms': '还款平台',
     'nav.statistics': '统计',
@@ -35,6 +36,7 @@ export const appMessages = {
     'error.ESTIMATE_AMOUNTS_INVALID': '请核对总价和已支付定金。应补金额须等于总价减去定金，且不能为负数。',
   },
   'en-US': {
+    'app.exitWithUnsavedChat': 'Some chat changes have not been saved on this device. Exit anyway?',
     'nav.ledger': 'Monthly ledger',
     'nav.platforms': 'Repayment platforms',
     'nav.statistics': 'Statistics',

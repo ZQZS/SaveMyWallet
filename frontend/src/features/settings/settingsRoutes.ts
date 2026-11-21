@@ -18,6 +18,7 @@ export const settingsRoutes: RouteRecordRaw[] = [
   { path: 'recovery', name: 'settings-recovery', component: () => import('./RecoverySettingsPage.vue') },
   { path: 'reset', name: 'settings-reset', component: ResetSettingsPage },
   { path: 'ai', name: 'settings-ai', component: AiSettingsPage },
+  { path: 'chat-cache', name: 'settings-chat-cache', component: () => import('./ChatCacheSettingsPage.vue') },
   { path: 'pets', name: 'settings-pets', component: PetSettingsPage },
   { path: 'reminders', name: 'settings-reminders', component: () => import('./ReminderTasksPage.vue') },
   { path: 'connections', name: 'settings-connections', component: ConnectionsSettingsPage },

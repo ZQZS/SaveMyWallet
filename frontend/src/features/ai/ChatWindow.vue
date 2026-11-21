@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { MessageCircle, MessageSquarePlus, Send, Square, X } from 'lucide-vue-next'
+import { MessageCircle, MessageSquarePlus, Send, Square, Trash2, X } from 'lucide-vue-next'
 import { useLedgerSession } from '../../app/ledgerSession'
 import type { MonthlySummary } from '../../domain/ledger'
 import { displayError, formatMoney, formatMonth, locale, t } from '../../i18n'
@@ -23,12 +23,19 @@ const { review, confirm, decline, forTurn } = useLedgerActionReview(session,
 const chat = props.pet
   ? (props.dialog ? usePetChat : usePersonaChat)(props.pet, props.month)
   : useGeneralChat(props.month)
-const { messages, draft, pending, error, send, stop, conversations, activeConversationId, newChat, selectChat, maxMessageLength } = chat
+const { messages, draft, pending, error, send, stop, conversations, activeConversationId, newChat, selectChat,
+  maxMessageLength, ready, storageError, retryStorage, deleteChat, scopeGeneration } = chat
 const speaker = computed(() => props.pet?.name ?? t('chat.assistant'))
 const root = ref<HTMLElement | null>(null)
 const transcript = ref<HTMLElement | null>(null)
 const input = ref<HTMLTextAreaElement | null>(null)
 const reviewHeading = ref<HTMLElement | null>(null)
+const threadSelect = ref<HTMLSelectElement | null>(null)
+const deleteButton = ref<HTMLButtonElement | null>(null)
+const keepButton = ref<HTMLButtonElement | null>(null)
+const deleteTarget = ref<{ id: number; title: string } | null>(null)
+const deleting = ref(false)
+const canDelete = computed(() => ready.value && !deleting.value && (conversations.value.length > 1 || !!draft.value || messages.value.length > 0))
 const shareMode = ref<'none' | 'summary' | 'details'>('none')
 const detailOptions = computed(() => petChatDetailOptions(props.month, props.totals, true))
 const selectedIds = ref(new Set<string>())
@@ -39,7 +46,7 @@ const detailAttachment = computed(() => shareMode.value === 'details'
 const configured = ref<boolean | null>(null)
 const keyError = ref('')
 const tooLong = computed(() => Array.from(draft.value.trim()).length > maxMessageLength)
-const canSend = computed(() => configured.value === true && !pending.value && !session.busy.value && !session.needsReload.value && !!draft.value.trim() && !tooLong.value
+const canSend = computed(() => ready.value && !deleteTarget.value && !deleting.value && configured.value === true && !pending.value && !session.busy.value && !session.needsReload.value && !!draft.value.trim() && !tooLong.value
   && (!detailAttachment.value || detailAttachment.value.entries.length > 0))
 const keyNeedsAttention = computed(() => ['AI_KEY_MISSING', 'AI_KEY_INVALID', 'AI_AUTH'].includes(error.value))
 let opener: HTMLElement | null = null
@@ -94,7 +101,10 @@ function resetSharing() {
   selectedIds.value = new Set()
   initializedSelection = false
 }
-watch(activeConversationId, resetSharing, { flush: 'sync' })
+watch([activeConversationId, scopeGeneration], () => {
+  resetSharing()
+  deleteTarget.value = null
+}, { flush: 'sync' })
 watch([() => messages.value.length, activeConversationId], scrollToLatest, { flush: 'post' })
 watch(review, action => {
   if (action) reviewHeading.value?.focus({ preventScroll: true })
@@ -102,9 +112,36 @@ watch(review, action => {
 
 function startChat() {
   // New chat may reuse the current empty conversation and keep its ID.
+  deleteTarget.value = null
   resetSharing()
   newChat()
-  input.value?.focus({ preventScroll: true })
+  void nextTick(() => input.value?.focus({ preventScroll: true }))
+}
+
+function requestDeletion() {
+  const thread = conversations.value.find(item => item.id === activeConversationId.value)
+  if (!thread || !canDelete.value) return
+  deleteTarget.value = { id: thread.id, title: thread.title || t('pets.chat.untitled', { number: thread.number }) }
+  void nextTick(() => keepButton.value?.focus({ preventScroll: true }))
+}
+
+function keepChat() {
+  deleteTarget.value = null
+  void nextTick(() => deleteButton.value?.focus({ preventScroll: true }))
+}
+
+async function confirmDeletion() {
+  const target = deleteTarget.value
+  if (!target || deleting.value || target.id !== activeConversationId.value) return
+  deleting.value = true
+  try {
+    if (await deleteChat(target.id)) deleteTarget.value = null
+  } finally {
+    deleting.value = false
+    await nextTick()
+    const focusTarget = keepButton.value ?? threadSelect.value
+    focusTarget?.focus({ preventScroll: true })
+  }
 }
 
 onMounted(() => {
@@ -124,7 +161,7 @@ onBeforeUnmount(() => {
 
 <template>
   <component :is="dialog ? 'dialog' : 'section'" ref="root" class="chat-window" :class="{ 'pet-dialog': dialog, 'chat-page': !dialog }"
-    aria-labelledby="chat-title" :aria-describedby="review ? undefined : 'chat-disclosure'"
+    aria-labelledby="chat-title" :aria-describedby="review || deleteTarget ? undefined : 'chat-disclosure'"
     @cancel="stop" @close="emit('close')">
     <header class="chat-heading">
       <span class="chat-avatar" aria-hidden="true">
@@ -141,23 +178,43 @@ onBeforeUnmount(() => {
     <nav class="thread-bar" :aria-label="t('pets.chat.chooseThread')">
       <label>
         <span>{{ t('pets.chat.chooseThread') }}</span>
-        <select :value="activeConversationId" @change="selectChat(Number(($event.currentTarget as HTMLSelectElement).value))">
+        <select ref="threadSelect" name="chatThread" :value="activeConversationId" :disabled="!ready || deleting"
+          @change="selectChat(Number(($event.currentTarget as HTMLSelectElement).value))">
           <option v-for="thread in conversations" :key="thread.id" :value="thread.id">
-            {{ thread.title || t('pets.chat.untitled', { number: thread.id }) }}
+            {{ thread.title || t('pets.chat.untitled', { number: thread.number }) }}
           </option>
         </select>
       </label>
-      <button type="button" class="new-thread" @click="startChat">
+      <button type="button" name="newChat" class="new-thread" :disabled="!ready || deleting" @click="startChat">
         <MessageSquarePlus :size="16" aria-hidden="true" />{{ t('pets.chat.newThread') }}
+      </button>
+      <button ref="deleteButton" type="button" name="deleteChat" class="delete-thread" :disabled="!canDelete || !!deleteTarget"
+        :aria-label="t('pets.chat.deleteThread')" :title="t('pets.chat.deleteThread')" @click="requestDeletion">
+        <Trash2 :size="17" aria-hidden="true" />
       </button>
     </nav>
 
-    <div ref="transcript" class="chat-history" role="log" :aria-label="t('pets.chat.history')" aria-relevant="additions" tabindex="0">
+    <div v-if="storageError" class="storage-status chat-error" role="alert">
+      {{ t(storageError === 'CHAT_CACHE_CHANGED' ? 'pets.chat.storageChanged' : ready ? 'pets.chat.saveError' : 'pets.chat.loadError') }}
+      <button type="button" name="retryChatStorage" class="text-action" @click="retryStorage">{{ t('pets.chat.retryStorage') }}</button>
+    </div>
+    <p v-else-if="!ready" class="storage-status disclosure" role="status">{{ t('pets.chat.loading') }}</p>
+
+    <section v-if="deleteTarget" class="delete-review" role="group" aria-labelledby="delete-chat-question"
+      @keydown.esc.prevent.stop="!deleting && keepChat()">
+      <p id="delete-chat-question">{{ t('pets.chat.deleteQuestion', { title: deleteTarget.title }) }}</p>
+      <div class="review-buttons">
+        <button ref="keepButton" type="button" name="keepChat" class="stop-button" :disabled="deleting" @click="keepChat">{{ t('pets.chat.keepThread') }}</button>
+        <button type="button" name="confirmDeleteChat" class="confirm-delete" :disabled="deleting" @click="confirmDeletion">{{ t('pets.chat.confirmDelete') }}</button>
+      </div>
+    </section>
+
+    <div ref="transcript" class="chat-history" role="log" :aria-label="t('pets.chat.history')" aria-relevant="additions" :aria-busy="!ready" tabindex="0">
       <div v-if="pet?.greetings[0]" class="chat-message">
         <strong>{{ pet.name }}</strong>
         <p>{{ pet.greetings[0] }}</p>
       </div>
-      <p v-if="!pet && !messages.length" class="empty-chat">{{ t('chat.empty') }}</p>
+      <p v-if="ready && !pet && !messages.length" class="empty-chat">{{ t('chat.empty') }}</p>
       <div v-for="(message, index) in messages" :key="index" class="chat-message" :class="{ 'from-user': message.role === 'user' }">
         <strong>{{ message.role === 'user' ? t('pets.chat.you') : speaker }}</strong>
         <p>{{ message.content }}</p>
@@ -165,7 +222,7 @@ onBeforeUnmount(() => {
       <p v-if="pending && !review" class="reply-status" role="status">{{ t('pets.chat.wait', { name: speaker }) }}</p>
     </div>
 
-    <section v-if="review" class="action-review" aria-labelledby="action-review-title">
+    <section v-if="review && !deleteTarget" class="action-review" aria-labelledby="action-review-title">
       <h3 id="action-review-title" ref="reviewHeading" tabindex="-1">{{ t('chat.action.review', { action: t('chat.action.' + review.name) }) }}</h3>
       <ul>
         <li v-for="(line, index) in review.lines" :key="index">{{ line }}</li>
@@ -175,10 +232,10 @@ onBeforeUnmount(() => {
         <button type="button" class="action-confirm send-button" @click="($event.detail < 2) && confirm()">{{ t('chat.action.confirm') }}</button>
       </div>
     </section>
-    <form v-else class="chat-compose" @submit.prevent="submit">
+    <form v-else-if="!deleteTarget" class="chat-compose" @submit.prevent="submit">
       <p id="chat-disclosure" class="disclosure">{{ t(pet ? 'pets.chat.disclosure' : 'chat.disclosure') }}</p>
       <button v-if="session.needsReload.value" type="button" class="text-action" :disabled="session.busy.value" @click="session.retryRead">{{ t('app.retry') }}</button>
-      <fieldset class="share-options" :disabled="pending">
+      <fieldset class="share-options" :disabled="pending || !ready">
         <legend>{{ t('pets.chat.share', { month: formatMonth(month) }) }}</legend>
         <div class="share-choices">
           <label v-for="mode in (['none', 'summary', 'details'] as const)" :key="mode">
@@ -208,7 +265,7 @@ onBeforeUnmount(() => {
       <p v-if="tooLong" class="chat-error" role="alert">{{ t('pets.chat.limit', { count: maxMessageLength }) }}</p>
       <div class="compose-row">
         <textarea ref="input" v-model="draft" rows="2" enterkeyhint="send" :maxlength="maxMessageLength * 2"
-          :readonly="pending" :aria-invalid="tooLong" :aria-label="t('pets.chat.message')"
+          :readonly="pending || !ready" :aria-invalid="tooLong" :aria-label="t('pets.chat.message')"
           :placeholder="shareMode === 'details' ? t('pets.chat.detailsPlaceholder') : t('pets.chat.placeholder', { name: speaker })"
           @keydown.enter="handleEnter" />
         <button v-if="pending" type="button" class="stop-button" @click="stop">
@@ -243,6 +300,13 @@ onBeforeUnmount(() => {
 .thread-bar select { flex: 1; width: 100%; min-width: 0; min-height: 34px; padding: 3px 5px; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; text-overflow: ellipsis; font-size: .86rem; }
 .new-thread { display: inline-flex; align-items: center; gap: 5px; min-height: 36px; padding: 3px 6px; white-space: nowrap; background: transparent; color: var(--green); border: 0; border-radius: 6px; font-size: .84rem; font-weight: 650; }
 .new-thread:hover { background: var(--soft); }
+.delete-thread { flex: none; display: grid; place-items: center; width: 40px; min-height: 36px; padding: 0; color: var(--danger-ink); border: 0; border-radius: 6px; background: transparent; }
+.delete-thread:hover:enabled { background: var(--danger-bg); }
+.thread-bar button:disabled { opacity: .45; }
+.storage-status { padding: 6px 14px; }
+.delete-review { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--danger-bg); }
+.delete-review p { flex: 1 1 13rem; margin: 0; font-size: .88rem; overflow-wrap: anywhere; }
+.confirm-delete { min-height: 44px; padding: 6px 12px; border: 1px solid var(--danger-solid); border-radius: 9px; color: var(--on-danger); background: var(--danger-solid); font-size: .87rem; font-weight: 650; }
 .chat-history { flex: 1 1 0; min-height: 5rem; padding: 16px; overflow: auto; overscroll-behavior: contain;
   background-color: var(--paper); background-image: var(--page-background-image); background-size: var(--page-background-size); background-position: center; }
 .chat-message { width: fit-content; max-width: 88%; margin-bottom: 12px; overflow-wrap: anywhere; }
@@ -276,10 +340,12 @@ onBeforeUnmount(() => {
 .chat-error { color: var(--danger-ink); }
 .chat-window a, .text-action { color: var(--green); text-decoration: underline; text-underline-offset: 2px; }
 .text-action { border: 0; padding: 3px; background: transparent; }
-@media (pointer: coarse) { .share-choices label, .thread-bar select, .new-thread { min-height: 44px; } }
+@media (pointer: coarse) { .share-choices label, .thread-bar select, .thread-bar button { min-height: 44px; } .delete-thread { width: 44px; } }
 @media (max-width: 440px) {
   .pet-dialog { width: calc(100% - 12px); height: min(44rem, calc(100% - 12px)); max-height: calc(100dvh - 12px); }
   .chat-compose, .chat-heading, .thread-bar { padding-inline: 10px; }
+  .thread-bar { gap: 4px; }
+  .thread-bar label { display: grid; gap: 2px; padding: 2px 0; }
 }
 @media (max-width: 860px) {
   .chat-page { height: max(27rem, calc(100dvh - 9.5rem - env(safe-area-inset-top) - env(safe-area-inset-bottom))); }

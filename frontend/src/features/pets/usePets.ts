@@ -140,12 +140,12 @@ async function removePet(id: string): Promise<void> {
   const card = imported.value.find(item => importedId(item.id) === id)
   if (!card) return
   try {
+    await forgetPetChats(id)
     await petStorage.remove(card.id)
   } catch {
     throw new Error('pets.import.storage')
   }
   imported.value = imported.value.filter(item => item.id !== card.id)
-  forgetPetChats(id)
   if (card.avatar) URL.revokeObjectURL(card.avatar)
   if (preferences.value.selectedId === id) selectPet('wallet-cat')
 }

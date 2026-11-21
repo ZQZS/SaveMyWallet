@@ -1,17 +1,31 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import { useLedgerSession } from '../../app/ledgerSession'
-import { MAX_MONTH, MIN_MONTH } from '../../domain/ledger'
+import { isMonth, MAX_MONTH, MIN_MONTH } from '../../domain/ledger'
 import { t } from '../../i18n'
 import { usePets } from '../pets/usePets'
 import ChatWindow from './ChatWindow.vue'
 
-const { data, month, busy, selectMonth, calculateMonth } = useLedgerSession()
+const session = useLedgerSession()
+const { data, month, busy, selectMonth, calculateMonth } = session
 const totals = computed(() => data.value && calculateMonth(data.value, month.value))
 const monthPicker = ref<HTMLInputElement | null>(null)
 const personaPicker = ref<HTMLSelectElement | null>(null)
 const { characters, ready, storageError } = usePets()
 const preferenceKey = 'savemywallet.chat.persona'
+const monthKey = 'savemywallet.chat.month'
+
+// On a fresh launch resume the last menu chat, including a past month.
+// An explicit month choice or a ledger operation in this session takes precedence.
+if (!session.hasSelectedMonth && !session.writeCount.value) {
+  try {
+    const saved = localStorage.getItem(monthKey)
+    if (saved && isMonth(saved) && saved !== month.value) selectMonth(saved)
+  } catch { /* The ledger's current month works without preferences. */ }
+}
+watch(month, value => {
+  try { localStorage.setItem(monthKey, value) } catch { /* The selected month still applies. */ }
+}, { immediate: true, flush: 'sync' })
 
 function readPersona() {
   try { return localStorage.getItem(preferenceKey) ?? '' } catch { return '' }
